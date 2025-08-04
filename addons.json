@@ -1,0 +1,6 @@
+{
+  "addons": [
+    "./nec_tcp_remote",
+    "./test_addon"
+  ]
+}
