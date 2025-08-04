@@ -1,38 +1,12 @@
 {
   "name": "Universal TCP Remote",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "slug": "nec_tcp_remote",
   "description": "Control multiple TCP devices (like projectors) with custom commands.",
-  "arch": ["amd64", "aarch64", "armv7"],
   "startup": "application",
   "boot": "auto",
+  "arch": ["amd64", "aarch64", "armv7"],
   "host_network": true,
-  "options": {
-    "devices": [
-      {
-        "name": "Projector 1",
-        "ip_address": "10.60.12.11",
-        "port": 7142,
-        "commands": {
-          "on": "POWER ON",
-          "off": "POWER OFF",
-          "status": "POWER ?"
-        }
-      }
-    ]
-  },
-  "schema": {
-    "devices": [
-      {
-        "name": "str",
-        "ip_address": "str",
-        "port": "int",
-        "commands": {
-          "on": "str",
-          "off": "str",
-          "status": "str"
-        }
-      }
-    ]
-  }
+  "options": {},
+  "schema": {},
 }
