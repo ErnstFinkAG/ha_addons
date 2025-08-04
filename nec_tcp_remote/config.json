@@ -6,7 +6,6 @@
   "startup": "application",
   "boot": "auto",
   "arch": ["amd64", "aarch64", "armv7"],
-  "startup": "application",
   "options": {
     "devices": [
       {
