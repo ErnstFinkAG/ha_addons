@@ -13,5 +13,4 @@
   "schema": {
     "devices_config": "str"
   },
-  "image": "ghcr.io/ernstfinkag/ha_addons/nec_tcp_remote-{arch}"
 }
