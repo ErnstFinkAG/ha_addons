@@ -43,27 +43,22 @@ def on_message(client, userdata, msg):
     config = userdata['config']
     devices = config.get('devices', [])
     topic = msg.topic
-    payload = msg.payload.decode().strip().lower()
     for device in devices:
         topic_base = device['name']
         if topic == f"{topic_base}/command":
-            cmd = device['commands'].get(payload)
-            if not cmd and payload.startswith("raw:"):
-                cmd = payload[4:]
-            if cmd:
-                response = send_tcp_command(device['ip_address'], device['port'], cmd)
-                pub_topic = f"{topic_base}/status"
-                print(f"[DEBUG] Publishing response to {pub_topic}: {response}")
-                client.publish(pub_topic, response)
-            else:
-                print(f"[DEBUG] Unknown command '{payload}' for device {topic_base}")
-                client.publish(f"{topic_base}/status", f"Unknown command: {payload}")
+            cmd = msg.payload.decode().strip()
+            print(f"[DEBUG] Sending raw TCP command: '{cmd}'")
+            response = send_tcp_command(device['ip_address'], device['port'], cmd)
+            pub_topic = f"{topic_base}/status"
+            print(f"[DEBUG] Publishing response to {pub_topic}: {response}")
+            client.publish(pub_topic, response)
 
 def main():
     config = get_config()
     # For debug: Print config (redact password for logs)
     safe_config = config.copy()
-    safe_config["mqtt_pass"] = "***"
+    if "mqtt_pass" in safe_config:
+        safe_config["mqtt_pass"] = "***"
     print(f"[DEBUG] Loaded config: {safe_config}")
     # Parse devices from devices_json string if needed (for string-style config)
     if "devices_json" in config:

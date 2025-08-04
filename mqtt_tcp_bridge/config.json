@@ -1,6 +1,6 @@
 {
   "name": "MQTT TCP Bridge",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "slug": "mqtt_tcp_bridge",
   "description": "Control TCP devices with Home Assistant via MQTT.",
   "arch": ["amd64", "aarch64", "armv7"],
@@ -10,9 +10,9 @@
   "options": {
     "mqtt_host": "localhost",
     "mqtt_port": 1883,
-    "mqtt_user": "homeassistant",
-    "mqtt_pass": "your_password",
-    "devices_json": "[{\"name\": \"projector1\", \"ip_address\": \"10.60.12.11\", \"port\": 7142, \"commands\": {\"on\": \"POWER ON\", \"off\": \"POWER OFF\", \"status\": \"POWER ?\"}}]"
+    "mqtt_user": "mqtt_user",
+    "mqtt_pass": "mqtt_password",
+    "devices_json": "[{\"name\": \"projector1\", \"ip_address\": \"10.60.12.11\", \"port\": 7142}]"
   },
   "schema": {
     "mqtt_host": "str",
