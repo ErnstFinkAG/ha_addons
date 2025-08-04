@@ -1,38 +1,17 @@
 {
   "name": "Universal TCP Remote",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "slug": "nec_tcp_remote",
   "description": "Control multiple TCP devices (like projectors) with custom commands.",
+  "arch": ["amd64", "aarch64", "armv7"],
   "startup": "application",
   "boot": "auto",
-  "arch": ["amd64", "aarch64", "armv7"],
+  "host_network": true,
   "options": {
-    "devices": [
-      {
-        "name": "Projector 1",
-        "ip_address": "10.60.12.11",
-        "port": 7142,
-        "commands": {
-          "on": "POWER ON",
-          "off": "POWER OFF",
-          "status": "POWER ?"
-        }
-      }
-    ]  
+    "devices_config": "[\n  {\n    \"name\": \"Projector 1\",\n    \"ip_address\": \"10.60.12.11\",\n    \"port\": 7142,\n    \"commands\": {\n      \"on\": \"POWER ON\",\n      \"off\": \"POWER OFF\",\n      \"status\": \"POWER ?\"\n    }\n  }\n]"
   },
   "schema": {
-    "devices": [
-      {
-        "name": "str",
-        "ip_address": "str",
-        "port": "int",
-        "commands": {
-          "on": "str",
-          "off": "str",
-          "status": "str"
-        }
-      }
-    ]
+    "devices_config": "str"
   },
-  "image": "ghcr.io/ernstfinkag/ha_addons/test_addon-{arch}"
+  "image": "ghcr.io/ernstfinkag/ha_addons/nec_tcp_remote-{arch}"
 }
