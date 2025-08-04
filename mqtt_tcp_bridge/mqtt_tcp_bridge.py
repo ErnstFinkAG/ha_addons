@@ -49,7 +49,8 @@ def main():
     mqtt_user = config.get("mqtt_user")
     mqtt_pass = config.get("mqtt_pass")
     devices = config.get("devices", [])
-    client = mqtt.Client(userdata={"config": config})
+    client = mqtt.Client()
+    client.user_data_set({"config": config})
     if mqtt_user:
         client.username_pw_set(mqtt_user, mqtt_pass)
     client.on_message = on_message
