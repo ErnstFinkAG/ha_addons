@@ -1,6 +1,6 @@
 {
   "name": "MQTT TCP Bridge",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "slug": "mqtt_tcp_bridge",
   "description": "Control TCP devices with Home Assistant via MQTT.",
   "arch": ["amd64", "aarch64", "armv7"],
