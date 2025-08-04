@@ -12,35 +12,13 @@
     "mqtt_port": 1883,
     "mqtt_user": "homeassistant",
     "mqtt_pass": "your_password",
-    "devices": [
-      {
-        "name": "projector1",
-        "ip_address": "10.60.12.11",
-        "port": 7142,
-        "commands": {
-          "on": "POWER ON",
-          "off": "POWER OFF",
-          "status": "POWER ?"
-        }
-      }
-    ]
+    "devices_json": "[{\"name\": \"projector1\", \"ip_address\": \"10.60.12.11\", \"port\": 7142, \"commands\": {\"on\": \"POWER ON\", \"off\": \"POWER OFF\", \"status\": \"POWER ?\"}}]"
   },
   "schema": {
     "mqtt_host": "str",
     "mqtt_port": "int",
     "mqtt_user": "str",
     "mqtt_pass": "str",
-    "devices": [
-      {
-        "name": "str",
-        "ip_address": "str",
-        "port": "int",
-        "commands": {
-          "on": "str",
-          "off": "str",
-          "status": "str"
-        }
-      }
-    ]
+    "devices_json": "str"
   }
 }
