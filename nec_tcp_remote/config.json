@@ -1,6 +1,6 @@
 {
   "name": "Universal TCP Remote",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "slug": "nec_tcp_remote",
   "description": "Control multiple TCP devices (like projectors) with custom commands.",
   "arch": ["amd64", "aarch64", "armv7"],
