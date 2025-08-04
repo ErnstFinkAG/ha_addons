@@ -7,7 +7,33 @@
   "boot": "auto",
   "arch": ["amd64", "aarch64", "armv7"],
   "startup": "application",
-  "options": {},
-  "schema": {},
+  "options": {
+    "devices": [
+      {
+        "name": "Projector 1",
+        "ip_address": "10.60.12.11",
+        "port": 7142,
+        "commands": {
+          "on": "POWER ON",
+          "off": "POWER OFF",
+          "status": "POWER ?"
+        }
+      }
+    ]  
+  },
+  "schema": {
+    "devices": [
+      {
+        "name": "str",
+        "ip_address": "str",
+        "port": "int",
+        "commands": {
+          "on": "str",
+          "off": "str",
+          "status": "str"
+        }
+      }
+    ]
+  },
   "image": "ghcr.io/ernstfinkag/ha_addons/test_addon-{arch}"
 }
