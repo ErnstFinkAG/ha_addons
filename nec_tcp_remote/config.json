@@ -6,6 +6,8 @@
   "startup": "application",
   "boot": "auto",
   "arch": ["amd64", "aarch64", "armv7"],
+  "startup": "application",
   "options": {},
   "schema": {},
+  "image": "ghcr.io/ernstfinkag/ha_addons/test_addon-{arch}"
 }
