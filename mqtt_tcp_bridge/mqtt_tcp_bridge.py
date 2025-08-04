@@ -49,7 +49,7 @@ def main():
     mqtt_user = config.get("mqtt_user")
     mqtt_pass = config.get("mqtt_pass")
     devices = config.get("devices", [])
-    client = mqtt.Client(protocol=mqtt.MQTTv5)
+    client = mqtt.Client(protocol=mqtt.MQTTv5, callback_api_version=5)
     client.user_data_set({"config": config})
     if mqtt_user:
         client.username_pw_set(mqtt_user, mqtt_pass)
