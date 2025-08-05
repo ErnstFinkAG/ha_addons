@@ -3,6 +3,7 @@ import time
 import paho.mqtt.client as mqtt
 import json
 import os
+import sys
 
 CONFIG_PATH = "/data/options.json"
 
@@ -22,6 +23,11 @@ def main():
     WS_HOST = config["ws_host"]
     WS_PORT = config["ws_port"]
     PACKET_SIZE = config["packet_size"]
+    UNIQUE_PREFIX = config.get("unique_prefix", None)
+
+    if not UNIQUE_PREFIX or not UNIQUE_PREFIX.strip():
+        print("[FATAL] unique_prefix option must be set in add-on options and not be empty.")
+        sys.exit(1)
 
     # --- MQTT Setup ---
     mqtt_client = mqtt.Client(protocol=mqtt.MQTTv311)
@@ -48,15 +54,15 @@ def main():
             ("low_battery", "Batterie schwach", None),
         ]
         for sensor_id, name, unit in sensors:
-            unique_id = f"wh65lp_{sensor_id}"
+            unique_id = f"{UNIQUE_PREFIX}_{sensor_id}"
             state_topic = f"{MQTT_PREFIX}/{sensor_id}"
             payload = {
-                "name": f"WH65LP {name}",
+                "name": f"{UNIQUE_PREFIX.upper()} {name}",
                 "state_topic": state_topic,
                 "unique_id": unique_id,
                 "device": {
-                    "identifiers": ["wh65lp_rs485"],
-                    "name": "WH65LP Wetterstation",
+                    "identifiers": [f"{UNIQUE_PREFIX}_rs485"],
+                    "name": f"{UNIQUE_PREFIX.upper()} Wetterstation",
                     "manufacturer": "Misol",
                     "model": "WH65LP"
                 }
