@@ -4,7 +4,7 @@ import paho.mqtt.client as mqtt
 import json
 import os
 
-CONFIG_PATH = "/options.json"
+CONFIG_PATH = "/data/options.json"
 
 def get_config():
     with open(CONFIG_PATH) as f:
