@@ -98,8 +98,10 @@ def main():
         rain = {}
         debug = {}
 
-        wind_dir = data[2]
-        wind["wind_direction_deg"] = wind_dir if wind_dir <= 359 else None
+        # -- WIND DIRECTION FIX: Scale 0-255 -> 0-359°
+        wind_dir_raw = data[2]
+        wind_dir_deg = int(wind_dir_raw * 360 / 256)  # scale 0-255 to 0-359°
+        wind["wind_direction_deg"] = wind_dir_deg
 
         dir_h = (data[3] >> 4) & 0x0F
         tmp_h = data[3] & 0x0F
