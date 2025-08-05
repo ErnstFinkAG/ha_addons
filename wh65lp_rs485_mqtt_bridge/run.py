@@ -72,6 +72,12 @@ def main():
             if sensor_id == "low_battery":
                 payload["device_class"] = "battery"
             topic = f"{DISCOVERY_PREFIX}/sensor/{unique_id}/config"
+            # --- DEBUG LOGGING ---
+            print(f"[DISCOVERY-DEBUG] Sensor: {sensor_id}")
+            print(f"  unique_id: {unique_id}")
+            print(f"  discovery_topic: {topic}")
+            print(f"  discovery_payload: {json.dumps(payload)}")
+            # --- SEND DISCOVERY ---
             mqtt_client.publish(topic, json.dumps(payload), retain=True)
             print(f"[DISCOVERY] Published discovery for {name} ({topic})")
 
