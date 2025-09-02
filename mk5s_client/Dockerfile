@@ -1,25 +1,22 @@
-# syntax=docker/dockerfile:1
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
-FROM ${BUILD_FROM}
+ARG BUILD_FROM
+FROM $BUILD_FROM
 
-# Install deps
-RUN apk add --no-cache python3 py3-pip jq curl bash
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Create virtualenv (avoid PEP 668 system-protected environment)
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Add runtime deps
+RUN apk add --no-cache python3 py3-pip bash jq curl
 
-# Copy requirements & install into venv
+# Create & activate a virtualenv (avoid PEP 668 issues)
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv "$VIRTUAL_ENV"  && "$VIRTUAL_ENV/bin/pip" install --no-cache-dir --upgrade pip  && ln -s "$VIRTUAL_ENV/bin/pip" /usr/local/bin/pip  && ln -s "$VIRTUAL_ENV/bin/python" /usr/local/bin/python
+
 WORKDIR /app
+
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy application
 COPY run.sh /run.sh
 COPY mk5s_client.py /app/mk5s_client.py
+RUN chmod a+x /run.sh
 
-# Make scripts executable
-RUN chmod +x /run.sh
-
-# Entrypoint
-CMD ["/run.sh"]
+CMD [ "/run.sh" ]

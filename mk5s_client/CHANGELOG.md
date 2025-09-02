@@ -1,1 +1,1 @@
-0.1.2 - add parsed values to logs; small cleanups
+0.1.3 - Multi-arch & visibility fixes.
