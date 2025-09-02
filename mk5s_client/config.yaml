@@ -1,7 +1,7 @@
 name: MK5S Client
+version: 0.1.2
 slug: mk5s_client
-version: "0.1.3"
-description: "Poll MK5S via mkv.cgi; log QUESTION/ANSWER; decode confirmed-good values; expose to Home Assistant."
+description: Polls a MK5S controller and logs confirmed-good metrics from an MK5S controller.
 arch:
   - aarch64
   - amd64
@@ -10,11 +10,8 @@ arch:
 startup: services
 init: false
 boot: auto
-host_network: true
-ingress: false
-panel_icon: mdi:compressor
 options:
-  host: "10.60.23.11"
+  host: 10.60.23.11
   interval: 10
   timeout: 5
   verbose: true

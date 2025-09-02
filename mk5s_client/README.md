@@ -1,16 +1,15 @@
-# MK5S Client (confirmed-good)
+# MK5S Client
 
-Polls MK5S `/cgi-bin/mkv.cgi` with a fixed QUESTION string, logs the raw QUESTION/ANSWER,
-and decodes confirmed-good values:
-
-- Pressure (bar) from 3002/01 (HiU16 / 1000)
-- Motorstarts from 3007/03 (LoU16)
-- Lastspiele from 3007/04 (LoU16)
-- Lüfterstarts from 3007/0B (UInt32)
+A minimal Home Assistant add-on that polls an MK5S controller and logs confirmed-good values:
+- Kompressorauslass (pressure, bar)
+- Motorstarts
+- Lastspiele
 
 ## Options
-- `host` (default `10.60.23.11`)
-- `interval` seconds (default `10`)
-- `timeout` seconds (default `5`)
-- `verbose` (default `true`) — logs QUESTION/ANSWER
+- `host` (string) IP or host of controller (default `10.60.23.11`)
+- `interval` (int) seconds between polls
+- `timeout` (int) HTTP timeout seconds
+- `verbose` (bool) log question/answer and response headers
 
+## Build/runtime notes
+- Uses system `py3-requests` (no pip needed) to avoid PEP 668 issues.
