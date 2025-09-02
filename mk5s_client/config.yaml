@@ -1,0 +1,24 @@
+name: MK5S Client (confirmed-good)
+slug: mk5s_client
+version: "0.1.0"
+description: Polls an MK5S controller and publishes confirmed-good sensors to Home Assistant.
+url: https://github.com/ErnstFinkAG/ha_addons
+startup: services
+boot: auto
+hassio_api: true
+homeassistant_api: true
+ingress: false
+arch:
+  - amd64
+  - armv7
+  - aarch64
+options:
+  host: "10.60.23.11"
+  scan_interval: 15
+  request_timeout: 5
+  log_raw_frames: true
+schema:
+  host: str
+  scan_interval: int(5,300)?
+  request_timeout: int(2,30)?
+  log_raw_frames: bool?
