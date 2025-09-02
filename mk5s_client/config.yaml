@@ -1,4 +1,4 @@
-name: MK5S Client (confirmed-good)
+name: MK5S Client
 slug: mk5s_client
 version: "0.1.0"
 description: Polls an MK5S controller and publishes confirmed-good sensors to Home Assistant.
