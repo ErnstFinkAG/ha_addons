@@ -1,24 +1,38 @@
 #!/usr/bin/env python3
-import os, json, threading, time, signal
-from typing import Dict, Any, List, Optional, Tuple
+import os, json, threading, time, signal, re
+from typing import Dict, Any, List, Optional
 import requests
 import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
 
-# --- Sensor definitions -------------------------------------------------------
-# Each sensor entry describes:
-# - pair: "<index>.<subindex>"
-# - part: "u32" (full 32 bits), "hi" (high U16), "lo" (low U16)
-# - decode: function name applied after extracting part
-# - unit: Home Assistant unit_of_meas
-# - device_class: Home Assistant device class (optional)
-# - state_class: Home Assistant state class (optional)
-# - kind: "sensor" (default) or "binary_sensor"
-# - name: Friendly name suffix
-# - suggested_display_precision: (optional)
-#
-# Decoders below convert the raw integer to a Python number.
+# ------------------------- Verbose logging helpers ----------------------------
+def vlog(enabled: bool, msg: str) -> None:
+    if enabled:
+        print(msg, flush=True)
+
+def log_cycle_header(enabled: bool, ip: str) -> None:
+    vlog(enabled, f"[mk5s:{ip}] ==== decode cycle @ {time.strftime('%Y-%m-%d %H:%M:%S')} ====")
+
+def log_qna(enabled: bool, ip: str, question_hex: str, raw_answer: Optional[str], cleaned_answer: Optional[str]) -> None:
+    if not enabled:
+        return
+    vlog(True, f"[mk5s:{ip}] QUESTION={question_hex}")
+    vlog(True, f"[mk5s:{ip}] ANSWER_RAW={repr(raw_answer)}")
+    vlog(True, f"[mk5s:{ip}] ANSWER_CLEAN={repr(cleaned_answer)}")
+
+def log_value(enabled: bool, ip: str, key: str, pair: str, part: str, raw8: Optional[str], partv: Optional[int], calc: Optional[Any], unit: Optional[str]) -> None:
+    if not enabled:
+        return
+    raw_disp = raw8 if raw8 is not None else "X/None"
+    part_disp = str(partv) if partv is not None else "—"
+    if calc is None:
+        calc_disp = "unknown"
+    else:
+        calc_disp = str(calc) + (unit or "")
+    vlog(True, f"[mk5s:{ip}] {key:<24} pair={pair:<7} part={part:<3} raw={raw_disp:<10} int={part_disp:<12} calc={calc_disp}")
+
+# ------------------------------ Decoders -------------------------------------
 def _id(v: int) -> int:
     return v
 
@@ -32,7 +46,7 @@ def _hours_from_seconds_u32(v: int) -> float:
     return round(v / 3600.0, 1)
 
 def _percent_from_bucket(v: int) -> float:
-    # As provided: UInt32 / 65,831,881 × 100
+    # UInt32 / 65,831,881 × 100
     return round((v / 65831881.0) * 100.0, 2)
 
 def _service_remaining_3000(v: int) -> float:
@@ -44,6 +58,18 @@ def _service_remaining_6000(v: int) -> float:
 def _times1000(v: int) -> int:
     return v * 1000
 
+DECODERS = {
+    "_id": _id,
+    "_div10": _div10,
+    "_div1000": _div1000,
+    "_hours_from_seconds_u32": _hours_from_seconds_u32,
+    "_percent_from_bucket": _percent_from_bucket,
+    "_service_remaining_3000": _service_remaining_3000,
+    "_service_remaining_6000": _service_remaining_6000,
+    "_times1000": _times1000,
+}
+
+# ------------------------------ Sensors --------------------------------------
 SENSORS: Dict[str, Dict[str, Any]] = {
     "machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"},
     "pressure_bar":           {"pair":"3002.01","part":"hi", "decode":"_div1000","unit":"bar","device_class":"pressure","state_class":"measurement","name":"Pressure"},
@@ -78,36 +104,13 @@ SENSORS: Dict[str, Dict[str, Any]] = {
     "service_6000_hours":     {"pair":"3009.07","part":"u32","decode":"_service_remaining_6000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service 6000h Remaining"},
 }
 
-# Helper to group by pair
 PAIR_TO_KEYS: Dict[str, List[str]] = {}
 for key, meta in SENSORS.items():
     PAIR_TO_KEYS.setdefault(meta["pair"].upper(), []).append(key)
 
-# Build the default QUESTION string by concatenating all pairs (6 hex chars each)
-DEFAULT_QUESTION = "".join(p.replace(".","") for p in PAIR_TO_KEYS.keys())
-
-# Decoder dispatch
-DECODERS = {
-    "_id": _id,
-    "_div10": _div10,
-    "_div1000": _div1000,
-    "_hours_from_seconds_u32": _hours_from_seconds_u32,
-    "_percent_from_bucket": _percent_from_bucket,
-    "_service_remaining_3000": _service_remaining_3000,
-    "_service_remaining_6000": _service_remaining_6000,
-    "_times1000": _times1000,
-}
-
-stop_event = threading.Event()
-
-def slugify(s: str) -> str:
-    return "".join(c.lower() if (c.isalnum() or c in "-_") else "_" for c in (s or ""))
-
-def csv_list(s: str) -> List[str]:
-    return [x.strip() for x in s.split(",")] if s and s.strip() else []
-
+# Build a union QUESTION string (user override plus all required pairs)
 def build_question_pairs(question_hex: str) -> List[str]:
-    pairs = []
+    pairs: List[str] = []
     question_hex = question_hex.strip()
     for i in range(0, len(question_hex), 6):
         chunk = question_hex[i:i+6]
@@ -116,27 +119,46 @@ def build_question_pairs(question_hex: str) -> List[str]:
         pairs.append(f"{chunk[:4].upper()}.{chunk[4:6].upper()}")
     return pairs
 
-def parse_answer(answer_hex: str, pairs: List[str]) -> Dict[str, Optional[str]]:
-    """
-    Parse controller answer. For each requested pair we either get 'X' (missing) or 8 hex chars.
-    Returns mapping pair -> 8-hex string (uppercase) or None.
-    """
+def build_question_hex(user_hex: Optional[str]) -> str:
+    needed = set(PAIR_TO_KEYS.keys())
+    have = set()
+    if user_hex and user_hex.strip():
+        for p in build_question_pairs(user_hex):
+            have.add(p.upper())
+    wanted = needed | have
+    def sort_key(p: str):
+        idx, sub = p.split(".")
+        return (int(idx, 16), int(sub, 16))
+    return "".join(p.replace(".", "") for p in sorted(wanted, key=sort_key))
+
+DEFAULT_QUESTION = build_question_hex(None)
+
+def parse_answer(answer_text: Optional[str]) -> Optional[str]:
+    if answer_text is None:
+        return None
+    # Keep only HEX and 'X', uppercase
+    cleaned = re.sub(r"[^0-9A-FX]", "", str(answer_text).upper())
+    return cleaned
+
+def parse_answer_by_pairs(answer_hex: str, pairs: List[str]) -> Dict[str, Optional[str]]:
     out: Dict[str, Optional[str]] = {}
     i = 0
-    for p in pairs:
-        if i >= len(answer_hex):
-            out[p] = None
+    n = len(answer_hex)
+    for _ in pairs:
+        if i >= n:
+            out[_] = None
             continue
         ch = answer_hex[i]
         if ch == "X":
-            out[p] = None
+            out[_] = None
             i += 1
         else:
-            if i + 8 <= len(answer_hex):
-                out[p] = answer_hex[i:i+8].upper()
+            if i + 8 <= n:
+                out[_] = answer_hex[i:i+8]
                 i += 8
             else:
-                out[p] = None
+                out[_] = None
+                i = n
     return out
 
 def decode_part(u32_hex: str, part: str) -> Optional[int]:
@@ -150,8 +172,13 @@ def decode_part(u32_hex: str, part: str) -> Optional[int]:
         return (v >> 16) & 0xFFFF
     elif part == "lo":
         return v & 0xFFFF
-    else:
-        return None
+    return None
+
+def slugify(s: str) -> str:
+    return "".join(c.lower() if (c.isalnum() or c in "-_") else "_" for c in (s or ""))
+
+def csv_list(s: str) -> List[str]:
+    return [x.strip() for x in s.split(",")] if s and s.strip() else []
 
 def publish_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix: str):
     device = {
@@ -161,18 +188,14 @@ def publish_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_pre
         "name": name,
     }
     avail_topic = f"{base_slug}/availability"
-
     for key, meta in SENSORS.items():
         is_binary = (meta.get("kind", "sensor") == "binary_sensor")
         platform = "binary_sensor" if is_binary else "sensor"
-        sensor_id = key
-        state_key = key
-        conf_topic = f"{discovery_prefix}/{platform}/{base_slug}/{sensor_id}/config"
-        state_topic = f"{base_slug}/{state_key}"
-
+        conf_topic = f"{discovery_prefix}/{platform}/{base_slug}/{key}/config"
+        state_topic = f"{base_slug}/{key}"
         payload: Dict[str, Any] = {
             "name": f"{name} {meta.get('name', key.replace('_',' ').title())}",
-            "uniq_id": f"{base_slug}_{sensor_id}",
+            "uniq_id": f"{base_slug}_{key}",
             "stat_t": state_topic,
             "avty_t": avail_topic,
             "dev": device,
@@ -185,33 +208,27 @@ def publish_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_pre
             payload["stat_cla"] = meta["state_class"]
         if meta.get("device_class"):
             payload["dev_cla"] = meta["device_class"]
-
         if is_binary:
             payload["pl_on"] = "1"
             payload["pl_off"] = "0"
-
         cli.publish(conf_topic, json.dumps(payload), retain=True)
-
-def format_state(value: Any) -> str:
-    if value is None:
-        return "unknown"
-    return str(value)
 
 def poll_once(ip: str, timeout: int, question_hex: str) -> Optional[str]:
     url = f"http://{ip}/cgi-bin/mkv.cgi"
     try:
         r = requests.post(url, data={"QUESTION": question_hex}, timeout=timeout)
         if r.status_code == 200:
-            return r.text.strip()
-        else:
-            return None
+            return r.text
+        return None
     except Exception:
         return None
 
+stop_event = threading.Event()
+
 def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
-           mqtt_settings: dict, question_hex: str):
+           mqtt_settings: dict, question_hex: str, scaling_overrides: Dict[str, float]):
     base_slug = slugify(name or ip)
-    pairs = build_question_pairs(question_hex or DEFAULT_QUESTION)
+    pairs = build_question_pairs(question_hex)
 
     cli = mqtt.Client(client_id=f"mk5s_{base_slug}", clean_session=True)
     if mqtt_settings.get("user") or mqtt_settings.get("password"):
@@ -220,40 +237,49 @@ def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbo
     cli.will_set(avail_topic, payload="offline", retain=True)
     cli.connect(mqtt_settings["host"], int(mqtt_settings["port"]), keepalive=60)
 
-    # Publish discovery once
     publish_discovery(cli, base_slug, name, mqtt_settings["discovery_prefix"])
     cli.publish(avail_topic, "online", retain=True)
 
     while not stop_event.is_set():
-        answer = poll_once(ip, timeout, question_hex or DEFAULT_QUESTION)
-        if verbose:
-            print(f"[mk5s:{ip}] QUESTION={question_hex or DEFAULT_QUESTION}")
-            print(f"[mk5s:{ip}] ANSWER={answer!r}")
-        if answer:
-            parsed = parse_answer(answer, pairs)
-            # Decode and publish each sensor
+        log_cycle_header(verbose, ip)
+        raw_answer = poll_once(ip, timeout, question_hex)
+        cleaned = parse_answer(raw_answer)
+        log_qna(verbose, ip, question_hex, raw_answer, cleaned)
+
+        if cleaned:
+            parsed = parse_answer_by_pairs(cleaned, pairs)
             for key, meta in SENSORS.items():
-                p = meta["pair"].upper()
-                raw = parsed.get(p)
-                if raw is None:
-                    value = None
+                pair = meta["pair"].upper()
+                raw8 = parsed.get(pair)
+                if raw8 is None:
+                    partv = None
+                    calc = None
                 else:
-                    partv = decode_part(raw, meta["part"])
+                    partv = decode_part(raw8, meta["part"])
                     if partv is None:
-                        value = None
+                        calc = None
                     else:
                         dec = DECODERS[meta["decode"]]
                         try:
-                            value = dec(partv)
+                            calc = dec(partv)
                         except Exception:
-                            value = None
+                            calc = None
+                        # Optional multiplicative override (for edge variants)
+                        if key in scaling_overrides and isinstance(calc, (int, float)):
+                            try:
+                                calc = calc * float(scaling_overrides[key])
+                            except Exception:
+                                pass
+                # Publish
                 state_topic = f"{base_slug}/{key}"
-                cli.publish(state_topic, format_state(value), retain=True)
+                cli.publish(state_topic, "unknown" if calc is None else str(calc), retain=True)
+                # Verbose line per value
+                log_value(verbose, ip, key, pair, meta["part"], raw8, partv, calc, meta.get("unit"))
         else:
-            # Could not talk to host; mark offline
             cli.publish(avail_topic, "offline", retain=True)
 
-        for _ in range(int(interval*10)):
+        # Sleep with stop check
+        for _ in range(int(interval * 10)):
             if stop_event.is_set():
                 break
             time.sleep(0.1)
@@ -263,7 +289,6 @@ def main():
         with open(OPTIONS_PATH, "r") as f:
             opts = json.load(f)
     except Exception:
-        # Defaults for local testing
         opts = {}
 
     ip_list = csv_list(opts.get("ip_list", ""))
@@ -271,8 +296,14 @@ def main():
     interval_list = csv_list(opts.get("interval_list", ""))
     timeout_list = csv_list(opts.get("timeout_list", ""))
     verbose_list = csv_list(opts.get("verbose_list", ""))
-    default_question = (opts.get("question") or DEFAULT_QUESTION).strip().upper()
+    user_question = (opts.get("question") or "").strip().upper()
     question_list = csv_list(opts.get("question_list", ""))
+
+    # Optional per-sensor multiplicative overrides (e.g., {"module_hours": 1})
+    try:
+        scaling_overrides = json.loads(opts.get("scaling_overrides", "{}"))
+    except Exception:
+        scaling_overrides = {}
 
     if not ip_list:
         ip_list = ["10.60.23.11"]
@@ -295,17 +326,22 @@ def main():
         name = pick(name_list, i, ip)
         try:
             interval = int(pick(interval_list, i, "10"))
-        except:
+        except Exception:
             interval = 10
         try:
             timeout = int(pick(timeout_list, i, "5"))
-        except:
+        except Exception:
             timeout = 5
         verbose = pick(verbose_list, i, "false").lower() in ("1","true","yes","on")
-        qh = (pick(question_list, i, default_question) or default_question).upper()
-        # If user specified a question that doesn't include all default pairs, it's fine.
+
+        # Build union of all required pairs with any user-specified pairs
+        qh_user = pick(question_list, i, user_question)
+        question_hex = build_question_hex(qh_user)
+
         print(f"[mk5s] starting: host={ip} name={name} interval={interval}s timeout={timeout} verbose={verbose}")
-        t = threading.Thread(target=worker, args=(i, ip, name, interval, timeout, verbose, mqtt_settings, qh), daemon=True)
+        t = threading.Thread(target=worker,
+                             args=(i, ip, name, interval, timeout, verbose, mqtt_settings, question_hex, scaling_overrides),
+                             daemon=True)
         threads.append(t)
         t.start()
 
