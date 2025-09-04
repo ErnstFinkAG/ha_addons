@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # MK5s Client — Home Assistant add-on
-# VERSION: 0.7.0-working-3007-multipass-2025-09-04
+# VERSION: 0.7.1-ps-order-2025-09-04
 
 import os, json, threading, time, signal, re, hashlib
 from typing import Dict, Any, List, Optional, Tuple
@@ -9,7 +9,7 @@ import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
 SELF_PATH = __file__
-VERSION = "0.7.0-working-3007-multipass-2025-09-04"
+VERSION = "0.7.1-ps-order-2025-09-04"
 
 def file_sha256(path: str) -> str:
     h = hashlib.sha256()
@@ -95,12 +95,11 @@ DECODERS = {
 
 # ------------------------------ Sensors --------------------------------------
 SENSORS: Dict[str, Dict[str, Any]] = {
-    "machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"},
     "pressure_bar":           {"pair":"3002.01","part":"hi", "decode":"_div1000","unit":"bar","device_class":"pressure","state_class":"measurement","name":"Pressure"},
     "element_outlet":         {"pair":"3002.03","part":"hi", "decode":"_div10","unit":"°C","device_class":"temperature","state_class":"measurement","name":"Element Outlet"},
     "ambient_air":            {"pair":"3002.05","part":"hi", "decode":"_div10","unit":"°C","device_class":"temperature","state_class":"measurement","name":"Ambient Air"},
     "controller_temperature": {"pair":"3002.08","part":"hi", "decode":"_div10","unit":"°C","device_class":"temperature","state_class":"measurement","name":"Controller Temperature"},
-    "fan_motor":              {"pair":"3005.01","part":"hi", "decode":"_id","unit":None,"device_class":"running","state_class":None,"kind":"binary_sensor","name":"Fan Motor"},
+
     "running_hours":          {"pair":"3007.01","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Running Hours"},
     "motor_starts":           {"pair":"3007.03","part":"lo", "decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Motor Starts"},
     "load_cycles":            {"pair":"3007.04","part":"lo", "decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Load Cycles"},
@@ -120,57 +119,49 @@ SENSORS: Dict[str, Dict[str, Any]] = {
     "available_hours":        {"pair":"3007.22","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Available Hours"},
     "unavailable_hours":      {"pair":"3007.23","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Unavailable Hours"},
     "emergency_stop_hours":   {"pair":"3007.24","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Emergency Stop Hours"},
+
     "rpm_actual":             {"pair":"3021.01","part":"hi", "decode":"_id","unit":"rpm","device_class":None,"state_class":"measurement","name":"RPM Actual"},
     "rpm_requested":          {"pair":"3021.01","part":"lo", "decode":"_id","unit":"rpm","device_class":None,"state_class":"measurement","name":"RPM Requested"},
     "current":                {"pair":"3021.05","part":"lo", "decode":"_id","unit":"A","device_class":"current","state_class":"measurement","name":"Current"},
     "flow":                   {"pair":"3021.0A","part":"hi", "decode":"_id","unit":"%","device_class":None,"state_class":"measurement","name":"Flow"},
+
+    "fan_motor":              {"pair":"3005.01","part":"hi", "decode":"_id","unit":None,"device_class":"running","state_class":None,"kind":"binary_sensor","name":"Fan Motor"},
+
     "service_3000_hours":     {"pair":"3009.06","part":"u32","decode":"_service_remaining_3000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service 3000h Remaining"},
     "service_6000_hours":     {"pair":"3009.07","part":"u32","decode":"_service_remaining_6000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service 6000h Remaining"},
+
+    "machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"}
 }
 
-# Group pairs by 4-hex index
-INDEX_GROUPS: Dict[str, List[str]] = {}
-for meta in SENSORS.values():
-    pair = meta["pair"].upper()
-    idx, sub = pair.split(".")
-    INDEX_GROUPS.setdefault(idx, []).append(pair)
-for idx in INDEX_GROUPS:
-    INDEX_GROUPS[idx] = sorted(INDEX_GROUPS[idx], key=lambda p: int(p.split(".")[1], 16))
+# Desired polling order matching the PowerShell script
+PAIR_ORDER = [
+    "3002.01","3002.03","3002.05","3002.08",
+    "3007.01","3007.03","3007.04","3007.05","3007.06","3007.07","3007.08","3007.09","3007.0B","3007.0C","3007.0D","3007.0E","3007.0F","3007.14","3007.15","3007.18","3007.22","3007.23","3007.24",
+    "3021.01","3021.05","3021.0A",
+    "3005.01",
+    "3009.06","3009.07",
+    "3001.08",
+]
 
-# Special multi-pass strategy for 3007.*
-def permute_3007_order(pairs: List[str]) -> List[List[str]]:
-    # default ascending
-    p_default = list(pairs)
-    # put 0D right after 01 (before 0B/0C)
-    p_better = list(pairs)
-    if "3007.01" in p_better and "3007.0D" in p_better:
-        p_better.remove("3007.0D")
-        ins_at = p_better.index("3007.01") + 1
-        p_better.insert(ins_at, "3007.0D")
-    # only 0D
-    p_only = ["3007.0D"]
-    # put 0B/0C after 0D
-    p_after = list(pairs)
-    for tgt in ["3007.0B","3007.0C"]:
-        if tgt in p_after:
-            p_after.remove(tgt)
-    if "3007.0D" in p_after:
-        idx = p_after.index("3007.0D") + 1
-    else:
-        idx = 0
-    for tgt in ["3007.0B","3007.0C"]:
-        if tgt in pairs:
-            p_after.insert(idx, tgt)
-            idx += 1
-    # unique, keep order
-    seen = set()
-    out = []
-    for lst in [p_default, p_better, p_only, p_after]:
-        key = tuple(lst)
-        if key not in seen:
-            out.append(lst)
-            seen.add(key)
-    return out
+# We'll still send grouped-by-index requests, but in this global order and with the 3007 suborder as above.
+def group_pairs_by_index_in_order(pairs: List[str]) -> List[Tuple[str, List[str]]]:
+    groups: List[Tuple[str, List[str]]] = []
+    current_idx = None
+    bucket: List[str] = []
+    for p in pairs:
+        idx = p.split(".")[0]
+        if current_idx is None:
+            current_idx = idx
+            bucket = [p]
+        elif idx == current_idx:
+            bucket.append(p)
+        else:
+            groups.append((current_idx, bucket))
+            current_idx = idx
+            bucket = [p]
+    if current_idx is not None and bucket:
+        groups.append((current_idx, bucket))
+    return groups
 
 # ------------------------------ HTTP helpers ---------------------------------
 def clean_answer(s: Optional[str]) -> Optional[str]:
@@ -287,45 +278,6 @@ def publish_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_pre
 
 stop_event = threading.Event()
 
-def plausible_module_seconds(v_hex: Optional[str], alt_hex: Optional[str]) -> bool:
-    if not v_hex or len(v_hex) != 8 or v_hex.upper() == "XXXXXXXX":
-        return False
-    try:
-        v = int(v_hex, 16)
-    except Exception:
-        return False
-    # Must be > ~1000 seconds and < 10 years (in seconds)
-    return (v > 1000) and (v < 10 * 365 * 24 * 3600) and (v_hex != (alt_hex or ""))
-
-def choose_best_3007(pass_maps: List[Dict[str, Optional[str]]]) -> Dict[str, Optional[str]]:
-    # prefer a pass where 0D is plausible and != 14
-    best = pass_maps[0]
-    score_best = -1
-    for m in pass_maps:
-        v0d = m.get("3007.0D")
-        v14 = m.get("3007.14")
-        score = 0
-        if v0d and v0d != "X":
-            try:
-                iv = int(v0d, 16)
-                if iv > 1000:
-                    score += 2
-                if iv > 1000000:  # ~277h
-                    score += 2
-            except Exception:
-                pass
-        if v0d and v14 and v0d != v14:
-            score += 2
-        # fan_starts/acc_vol non-X help too
-        if m.get("3007.0B") not in (None, "X"):
-            score += 1
-        if m.get("3007.0C") not in (None, "X"):
-            score += 1
-        if score > score_best:
-            best = m
-            score_best = score
-    return best
-
 def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
            mqtt_settings: dict, scaling_overrides: Dict[str, float]):
     base_slug = slugify(name or ip)
@@ -344,7 +296,7 @@ def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbo
     while not stop_event.is_set():
         log_cycle_header(verbose, ip)
 
-        # --- PRIME READ --- (stabilize pages)
+        # --- PRIME READ --- (stabilize pages similar to PS script surrounding calls)
         try:
             prime_pairs = ["3003.01", "3003.02", "3003.0A", "3009.01"]
             q_prime = build_question(prime_pairs)
@@ -357,32 +309,13 @@ def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbo
             if verbose:
                 print(f"[mk5s:{ip}] PRIME_EXC={e}", flush=True)
 
+        # Poll in the requested order, but group consecutive pairs from the same index
         pair_raw: Dict[str, Optional[str]] = {}
-
-        # Normal groups except 3007
-        for idx, pairs in INDEX_GROUPS.items():
-            if idx == "3007":
-                continue
-            gmap = poll_group(session, ip, idx, pairs, timeout, verbose)
+        for idx, group in group_pairs_by_index_in_order(PAIR_ORDER):
+            gmap = poll_group(session, ip, idx, group, timeout, verbose)
             pair_raw.update(gmap)
 
-        # 3007 multi-pass
-        pairs_3007 = INDEX_GROUPS.get("3007", [])
-        pass_maps: List[Dict[str, Optional[str]]] = []
-        for order in permute_3007_order(pairs_3007):
-            gmap = poll_group(session, ip, "3007", order, timeout, verbose)
-            pass_maps.append(gmap)
-        # Deep-read fallback for 0D if still implausible
-        best = choose_best_3007(pass_maps)
-        if not plausible_module_seconds(best.get("3007.0D"), best.get("3007.14")):
-            tok = poll_pair(session, ip, "3007.0D", timeout, verbose)
-            if tok is not None:
-                best["3007.0D"] = tok
-                log_pair_token(verbose, ip, "3007.0D", tok, source="deep")
-
-        pair_raw.update(best)
-
-        # Per-pair fallback for any remaining None
+        # Fallback for any None tokens
         for pair, tok in list(pair_raw.items()):
             if tok is None:
                 tok2 = poll_pair(session, ip, pair, timeout, verbose)
@@ -415,7 +348,6 @@ def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbo
             cli.publish(state_topic, "unknown" if calc is None else str(calc), retain=True)
             log_value(verbose, ip, key, pair, meta["part"], raw8, partv, calc, meta.get("unit"))
 
-        # Sleep
         for _ in range(int(interval * 10)):
             if stop_event.is_set():
                 break
