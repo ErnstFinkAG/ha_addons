@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # MK5s Client — Home Assistant add-on
-# VERSION: 0.8.0-ps-sequence-parity-2025-09-04
+# VERSION: 0.8.1-entityid-fix-2025-09-04
 #
 # This version mirrors the PowerShell script:
 #   - One single QUESTION hex string (same order and content)
@@ -16,7 +16,7 @@ import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
 SELF_PATH = __file__
-VERSION = "0.8.0-ps-sequence-parity-2025-09-04"
+VERSION = "0.8.1-entityid-fix-2025-09-04"
 
 # ------------------------- PowerShell QUESTION (exact) ------------------------
 QUESTION_HEX = (
@@ -164,7 +164,15 @@ def slugify(s: str) -> str:
 def csv_list(s: str) -> List[str]:
     return [x.strip() for x in s.split(",")] if s and s.strip() else []
 
+
 def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix: str):
+    """
+    Publish MQTT Discovery with clean entity ids:
+    - node_id (topic segment) = base_slug
+    - object_id = sensor key (no base_slug prefix)
+    - name = human label only (no device name), HA shows device name in the device card
+    Also: publish empty retained configs to potential legacy topics that used base_slug twice.
+    """
     device = {
         "ids": [f"mk5s_{base_slug}"],
         "mf": "Atlas Copco",
@@ -175,11 +183,23 @@ def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix
     for key, meta in SENSORS.items():
         is_binary = (meta.get("kind", "sensor") == "binary_sensor")
         platform = "binary_sensor" if is_binary else "sensor"
+        # New, clean topic: .../<platform>/<node_id>/<object_id>/config  with object_id = key only
         conf_topic = f"{discovery_prefix}/{platform}/{base_slug}/{key}/config"
+        # Potential legacy/bad topic where object_id mistakenly included base_slug
+        legacy_conf_topic = f"{discovery_prefix}/{platform}/{base_slug}/{base_slug}_{key}/config"
+
+        # Proactively clear legacy entity (if existed)
+        try:
+            cli.publish(legacy_conf_topic, payload="", retain=True)
+        except Exception:
+            pass
+
         state_topic = f"{base_slug}/{key}"
         payload: Dict[str, Any] = {
-            "name": f"{name} {meta.get('name', key.replace('_',' ').title())}",
-            "uniq_id": f"{base_slug}_{key}",
+            # Friendly name: just the sensor label
+            "name": meta.get("name", key.replace('_', ' ').title()),
+            # Ensure uniqueness; include a namespace to be safe
+            "uniq_id": f"mk5s:{base_slug}:{key}",
             "stat_t": state_topic,
             "avty_t": avail_topic,
             "dev": device,
@@ -195,9 +215,11 @@ def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix
         if is_binary:
             payload["pl_on"] = "1"
             payload["pl_off"] = "0"
+
         cli.publish(conf_topic, json.dumps(payload), retain=True)
 
 stop_event = threading.Event()
+
 
 def single_pair_read(session: requests.Session, ip: str, pair: str, timeout: int, verbose: bool) -> Optional[str]:
     q = pair.replace(".","")

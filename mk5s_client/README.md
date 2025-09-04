@@ -1,219 +1,137 @@
-# Home Assistant Add-on — Atlas Copco MK5s Client
+# Atlas Copco MK5s Touch — Home Assistant Add‑on
 
-Poll Atlas Copco **MK5s Touch** controllers over HTTP and publish their telemetry to MQTT with **Home Assistant MQTT Discovery**.  
-This add-on is designed for Supervisor-based installs (HAOS / Supervised).
+**Client script:** `mk5s_client.py v0.8.1` (PS‑sequence parity + entity_id fix)
 
----
-
-## What it does
-
-- Sends `POST` requests to the controller at `http://<ip>/cgi-bin/mkv.cgi` with a hex **QUESTION**.
-- Decodes the response per register (“index.subindex”, e.g. `3007.01`) and publishes sensor states.
-- Auto-creates entities in Home Assistant using MQTT Discovery (one **device** per controller).
-- **Robust polling:** groups subindices by **index** (e.g., all `3007.*` together) to ensure the reply tokens align 1:1, with a safe per-pair fallback.
-- **Verbose logs:** optional per-host logs show (a) the QUESTION, (b) raw/clean reply, and (c) for every sensor: raw 8-hex, the extracted integer (Hi/Lo/U32), and the calculated value with units.
-- **Scaling overrides:** per-sensor multiplicative override to adapt to model differences (e.g., hours vs. seconds on your unit).
+This add‑on mirrors the proven PowerShell approach with **one single QUESTION** and strict token parsing. It also fixes MQTT Discovery so entity_ids aren’t double‑prefixed in Home Assistant.
 
 ---
 
-## Requirements
+## Quick start
 
-- An MQTT broker accessible by Home Assistant (e.g., the Mosquitto add-on).
-- Network access from the HA host to each MK5s controller (the add-on runs in `host_network: true`).
-- MK5s firmware exposing `cgi-bin/mkv.cgi` on HTTP.
+1. Copy `mk5s_client.py` (v0.8.1) into the add‑on.
+2. Configure `/data/options.json` (see **Configuration** below).
+3. Start the add‑on. Home Assistant auto‑discovers the device and sensors.
 
----
-
-## Installation
-
-1. In **Settings → Add-ons → Add-on Store → ⋮ (top-right) → Repositories**, add your repository URL that contains this add-on (`mk5s_client`).
-2. Open **MK5s Client** and click **Install**.
-3. Configure (see below) and click **Start**.
-
-> Entities will appear automatically via MQTT Discovery under the device: **Atlas Copco — MK5s Touch**.
+> If you previously had duplicates like `sensor.<slug>_<slug>_vsd_80_100`, v0.8.1 publishes empty retained configs to legacy topics so HA removes them. If they linger, reload MQTT in HA (Settings → Devices & Services → MQTT → Reload) or restart HA.
 
 ---
 
-## Configuration
+## How it works (PS‑parity)
 
-The add-on supports monitoring **one or many controllers** in parallel. Options ending with `_list` accept a comma-separated list. If a list is shorter than `ip_list`, the **last non-empty value** is used for the remaining hosts.
+- The client posts **one single `QUESTION`** to `/cgi-bin/mkv.cgi` using the exact hex sequence below.
+- The controller replies with a stream of tokens:
+  - Each token is either `X` (unavailable) **or** an 8‑hex `UInt32` word.
+  - Parsing is **sequential**: the N‑th token corresponds to the N‑th key of the QUESTION.
+- Tokens are mapped to HA sensors and **decoded** per the rules in the table.
+- If a field for HA is `X`, the client performs a **single‑pair fallback read** just for that pair (e.g., `QUESTION=30070D`).
 
-### Example — single controller
-
-```yaml
-ip_list: "10.60.23.11"
-name_list: "compressor_a"
-interval_list: "10"
-timeout_list: "5"
-verbose_list: "true"
-
-mqtt_host: "localhost"
-mqtt_port: 1883
-mqtt_user: "mqtt_user"
-mqtt_password: "mqtt_password"
-discovery_prefix: "homeassistant"
-
-# Optional: user QUESTION(s). Leave empty to let the add-on build the right one automatically.
-question: ""
-question_list: ""
-
-# Optional: fix scaling on models that already report hours (etc.).
-# Example: treat low_load_hours as hours (undo ÷3600): multiply by 3600
-scaling_overrides: '{"low_load_hours": 3600}'
+### Single‑shot QUESTION (exact order)
+```
+300201300203300205300208
+30030130030230030a
+30070130070330070430070530070630070730070830070930070b30070c30070d30070e30070f300714300715300718300722300723300724
+30210130210530210a
+300501300502300504300505300507300508300509
+300e03300e04300e2a300e88
+31130131130331130431130531130731130831130931130a31130b31130c31130d31130e31130f31131031131131131231131331131431131531131631131731131831131931131a31131b31131c31131d31131e31131f31132031132131132231132331132431132531132631132731132831132931132a31132b31132c31132d31132e31132f31133031133131133231133331133431133531133631133731133831133931133a31133b31133c31133d31133e31133f31134031134131134231134331134431134531134631134731134831134931134a31134b31134c31134d31134e31134f31135031135131135231135331135431135531135631135731135831135931135a31135b31135c31135d31135e31135f311360311361311362311363311364311365311366311367
+31140131140231140331140431140531140631140731140831140931140a31140b31140c31140d31140e31140f311410311411311412
+300901300906300907
+300108
 ```
 
-### Example — two controllers (mixed verbosity)
+---
 
-```yaml
-ip_list: "10.60.23.11,10.60.23.12"
-name_list: "compressor_a,compressor_b"
-interval_list: "10,15"
-timeout_list: "5,5"
-verbose_list: "true,false"
+## Full encoding list (MK5s Touch)
 
-mqtt_host: "mqtt-broker.local"
-mqtt_port: 1883
-mqtt_user: "ha"
-mqtt_password: "secret"
-discovery_prefix: "homeassistant"
+Legend:
+- **HiU16** = upper 16 bits of the 32‑bit word (unsigned)  
+- **LoU16** = lower 16 bits (unsigned)  
+- **UInt32** = full 32‑bit unsigned integer  
+- Seconds → hours shown as “/ 3600”  
+- VSD buckets: `% = UInt32 / 65,831,881 × 100`
 
-question: ""          # or remove this line entirely
-question_list: ""
-
-scaling_overrides: "{}"
-```
-
-### Option reference
-
-| Option              | Type / Format            | Default          | Notes |
-|---------------------|--------------------------|------------------|------|
-| `ip_list`           | CSV list                 | (required)       | One or more controller IPs. |
-| `name_list`         | CSV list                 | IP address       | Friendly device names (slugified for topics). |
-| `interval_list`     | CSV list of seconds      | `10`             | Poll period per host. |
-| `timeout_list`      | CSV list of seconds      | `5`              | HTTP timeout per request. |
-| `verbose_list`      | CSV list (`true/false`)  | `false`          | Per-host verbose logs. |
-| `mqtt_host`         | string                   | `localhost`      | Broker hostname/IP. |
-| `mqtt_port`         | int                      | `1883`           | Broker port. |
-| `mqtt_user`         | string                   | `""`             | MQTT username (optional). |
-| `mqtt_password`     | string                   | `""`             | MQTT password (optional). |
-| `discovery_prefix`  | string                   | `homeassistant`  | HA MQTT discovery prefix. |
-| `question`          | hex string               | *auto*           | Optional global QUESTION override. |
-| `question_list`     | CSV list of hex strings  | (empty)          | Optional per-host QUESTION. |
-| `scaling_overrides` | JSON object              | `{}`             | Per-sensor **multiplier** applied to the calculated value (e.g., `{"module_hours": 3600}`). |
-
-> **About `question` / `question_list`:** the add-on builds and sends the **correct grouped QUESTION per index** automatically. If you provide a custom QUESTION, the add-on **unions** it with the required pairs so you won’t miss any sensors.
+| HA key                   | Pair     | Part   | Decode → Unit                                 | Comment |
+|---                       |---       |---     |---                                            |---|
+| `pressure_bar`           | 3002.01  | HiU16  | **HiU16 / 1000** → **bar**                    |  |
+| `element_outlet`         | 3002.03  | HiU16  | **HiU16 / 10** → **°C**                       |  |
+| `ambient_air`            | 3002.05  | HiU16  | **HiU16 / 10** → **°C**                       |  |
+| `controller_temperature` | 3002.08  | HiU16  | **HiU16 / 10** → **°C**                       |  |
+| `running_hours`          | 3007.01  | UInt32 | **UInt32 / 3600** → **h**                     |  |
+| `motor_starts`           | 3007.03  | LoU16  | **LoU16**                                     |  |
+| `load_cycles`            | 3007.04  | LoU16  | **LoU16**                                     |  |
+| `vsd_1_20`               | 3007.05  | UInt32 | **(UInt32 / 65,831,881) × 100** → **%**       |  |
+| `vsd_20_40`              | 3007.06  | UInt32 | **(UInt32 / 65,831,881) × 100** → **%**       |  |
+| `vsd_40_60`              | 3007.07  | UInt32 | **(UInt32 / 65,831,881) × 100** → **%**       |  |
+| `vsd_60_80`              | 3007.08  | UInt32 | **(UInt32 / 65,831,881) × 100** → **%**       |  |
+| `vsd_80_100`             | 3007.09  | UInt32 | **(UInt32 / 65,831,881) × 100** → **%**       |  |
+| `fan_starts`             | 3007.0B  | UInt32 | **UInt32**                                     |  |
+| `accumulated_volume`     | 3007.0C  | UInt32 | **UInt32 × 1000** → **m³**                    |  |
+| `module_hours`           | 3007.0D  | UInt32 | **UInt32 / 3600** → **h**                     |  |
+| `emergency_stops`        | 3007.0E  | UInt32 | **UInt32**                                     |  |
+| `direct_stops`           | 3007.0F  | UInt32 | **UInt32**                                     |  |
+| `recirculation_starts`   | 3007.14  | UInt32 | **UInt32**                                     |  |
+| `recirculation_failures` | 3007.15  | UInt32 | **UInt32**                                     |  |
+| `low_load_hours`         | 3007.18  | UInt32 | **UInt32 / 3600** → **h**                     |  |
+| `available_hours`        | 3007.22  | UInt32 | **UInt32 / 3600** → **h**                     |  |
+| `unavailable_hours`      | 3007.23  | UInt32 | **UInt32 / 3600** → **h**                     |  |
+| `emergency_stop_hours`   | 3007.24  | UInt32 | **UInt32 / 3600** → **h**                     |  |
+| `rpm_actual`             | 3021.01  | HiU16  | **HiU16** → **rpm**                           |  |
+| `rpm_requested`          | 3021.01  | LoU16  | **LoU16** → **rpm**                           |  |
+| `current`                | 3021.05  | LoU16  | **LoU16** → **A**                             |  |
+| `flow`                   | 3021.0A  | HiU16  | **HiU16** → **%**                             |  |
+| `fan_motor` *(binary)*   | 3005.01  | HiU16  | **1 = ON**, **0 = OFF**                       | Published as `binary_sensor` |
+| `service_3000_hours`     | 3009.06  | UInt32 | **3000 − (UInt32/3600)** → **h**              | Remaining hours |
+| `service_6000_hours`     | 3009.07  | UInt32 | **6000 − (UInt32/3600)** → **h**              | Remaining hours |
+| `machine_status`         | 3001.08  | UInt32 | **UInt32**                                    | `5 = standby`, `28 = load` |
 
 ---
 
-## Sensors
+## Configuration (`/data/options.json`)
 
-This add-on publishes the following sensors. **Key** equals the MQTT topic suffix and the HA entity id suffix. Units and device classes are set for HA.
+| Key | Type | Example | Notes |
+|---|---|---|---|
+| `ip_list` | string (CSV) | `"10.60.23.11"` | One or more controllers |
+| `name_list` | string (CSV) | `"eftool-bw-b2-air1"` | Friendly device names |
+| `interval_list` | string (CSV) | `"10"` | Poll interval (s) |
+| `timeout_list` | string (CSV) | `"5"` | HTTP timeout (s) |
+| `verbose_list` | string (CSV) | `"true"` | Verbose logging per host |
+| `mqtt_host` | string | `"core-mosquitto"` | MQTT broker |
+| `mqtt_port` | number | `1883` |  |
+| `mqtt_user` | string | `""` | Optional |
+| `mqtt_password` | string | `""` | Optional |
+| `discovery_prefix` | string | `"homeassistant"` | HA MQTT discovery prefix |
+| `scaling_overrides` | JSON string | `"{}"` | Optional per‑sensor multiplier (applied after decode) |
 
-> ⚠️ Some registers can be unsupported on certain models/firmware and may return `X` (unknown).
+> CSV values are matched **by position** per host (last value repeats).
 
-| Key                      | Pair     | Part | Scaling → Unit                 | Notes |
-|--------------------------|----------|------|--------------------------------|-------|
-| `machine_status`         | 3001.08  | U32  | raw (status enum)              | 5 = standby, 28 = load. |
-| `pressure_bar`           | 3002.01  | HiU16| ÷1000 → `bar` (absolute)       | |
-| `element_outlet`         | 3002.03  | HiU16| ÷10 → `°C`                     | |
-| `ambient_air`            | 3002.05  | HiU16| ÷10 → `°C`                     | |
-| `controller_temperature` | 3002.08  | HiU16| ÷10 → `°C`                     | |
-| `fan_motor` *(binary)*   | 3005.01  | HiU16| `1/0` → `on/off`               | device_class: `running`. |
-| `running_hours`          | 3007.01  | U32  | ÷3600 → `h`                    | total_increasing. |
-| `motor_starts`           | 3007.03  | LoU16| raw                            | total_increasing. |
-| `load_cycles`            | 3007.04  | LoU16| raw                            | total_increasing. |
-| `vsd_1_20`               | 3007.05  | U32  | ÷65,831,881×100 → `%`          | |
-| `vsd_20_40`              | 3007.06  | U32  | ÷65,831,881×100 → `%`          | |
-| `vsd_40_60`              | 3007.07  | U32  | ÷65,831,881×100 → `%`          | |
-| `vsd_60_80`              | 3007.08  | U32  | ÷65,831,881×100 → `%`          | |
-| `vsd_80_100`             | 3007.09  | U32  | ÷65,831,881×100 → `%`          | |
-| `fan_starts`             | 3007.0B  | U32  | raw                            | total_increasing; may be `X` on some units. |
-| `accumulated_volume`     | 3007.0C  | U32  | ×1000 → `m³`                   | If your unit already reports m³, set `{"accumulated_volume": 0.001}`. |
-| `module_hours`           | 3007.0D  | U32  | ÷3600 → `h`                    | If hours already, set `{"module_hours": 3600}`. |
-| `emergency_stops`        | 3007.0E  | U32  | raw                            | total_increasing. |
-| `direct_stops`           | 3007.0F  | U32  | raw                            | total_increasing; may be `X` on some units. |
-| `recirculation_starts`   | 3007.14  | U32  | raw                            | total_increasing. |
-| `recirculation_failures` | 3007.15  | U32  | raw                            | total_increasing. |
-| `low_load_hours`         | 3007.18  | U32  | ÷3600 → `h`                    | If hours already, set `{"low_load_hours": 3600}`. |
-| `available_hours`        | 3007.22  | U32  | ÷3600 → `h`                    | total_increasing. |
-| `unavailable_hours`      | 3007.23  | U32  | ÷3600 → `h`                    | total_increasing. |
-| `emergency_stop_hours`   | 3007.24  | U32  | ÷3600 → `h`                    | total_increasing. |
-| `rpm_actual`             | 3021.01  | HiU16| raw → `rpm`                    | |
-| `rpm_requested`          | 3021.01  | LoU16| raw → `rpm`                    | |
-| `current`                | 3021.05  | LoU16| raw → `A`                      | |
-| `flow`                   | 3021.0A  | HiU16| raw → `%`                      | May be `X` on some units. |
-| `service_3000_hours`     | 3009.06  | U32  | `3000 - (U32 ÷ 3600)` → `h`    | Remaining hours (never below 0). |
-| `service_6000_hours`     | 3009.07  | U32  | `6000 - (U32 ÷ 3600)` → `h`    | Remaining hours (never below 0). |
-
----
-
-## MQTT topics
-
-For each host, a **base slug** is derived from `name` (or IP): lowercased, spaces to `_`.
-
-- **Availability:** `<slug>/availability` → `online` / `offline` (retained).
-- **States:** `<slug>/<key>` for every sensor key above (retained).
-- **Discovery:** `${discovery_prefix}/sensor/${slug}/${key}/config` (and `binary_sensor` for `fan_motor`).
-
-Discovery payloads include `uniq_id`, unit, device/state classes, and device metadata:
+Example:
 ```json
-"dev": { "ids": ["mk5s_<slug>"], "mf": "Atlas Copco", "mdl": "MK5s Touch", "name": "<display name>" }
+{
+  "ip_list": "10.60.23.11",
+  "name_list": "eftool-bw-b2-air1",
+  "interval_list": "10",
+  "timeout_list": "5",
+  "verbose_list": "true",
+  "mqtt_host": "core-mosquitto",
+  "mqtt_port": 1883,
+  "mqtt_user": "",
+  "mqtt_password": "",
+  "discovery_prefix": "homeassistant",
+  "scaling_overrides": "{}"
+}
 ```
 
 ---
 
-## Verbose logging (optional, per host)
+## MQTT Discovery (entity_id fix)
 
-Set `verbose_list` to `true` for a host to print detailed traces to the add-on log:
+- **Node ID (topic):** device slug, e.g. `eftool_bw_b2_air1`  
+- **Object ID:** just the sensor key, e.g. `vsd_80_100`  
+- **Unique ID:** `mk5s:<device_slug>:<key>`  
+- **State topic:** `<device_slug>/<key>`
 
-```
-[mk5s:10.60.23.11] ==== decode cycle @ 2025-09-04 16:41:53 ====
-[mk5s:10.60.23.11] Q[3007]=300701300703...300724
-[mk5s:10.60.23.11] A[3007]_RAW='...'
-[mk5s:10.60.23.11] A[3007]_CLEAN(len=...)='...' TOKENS=...
-[mk5s:10.60.23.11]   token[group:3007] 3007.0D = 0454A747
-[mk5s:10.60.23.11] module_hours           pair=3007.0D part=u32 raw=0454A747   int=72656711     calc=20182.0h
-...
-```
-
-- `X` means the controller reported the subindex **not available** at that moment/model.
-- A failed pair may be retried once via a per-pair fallback.
+`homeassistant/<platform>/<device_slug>/<device_slug>_<key>/config` (emptied, retained),
+then publishes the correct one:
+`homeassistant/<platform>/<device_slug>/<key>/config`.
 
 ---
-
-## Testing & troubleshooting
-
-- **Direct curl test** (grouped example for `3007.*`):
-  ```bash
-  curl -s -X POST "http://<ip>/cgi-bin/mkv.cgi" \
-       -d "QUESTION=30070130070330070430070530070630070730070830070930070B30070C30070D30070E30070F300714300715300718300722300723300724"
-  ```
-  The reply is a stream of tokens; each requested subindex yields either **8 hex** (`0000001C`) or a single **`X`**.
-
-- **Entities stay `unknown`**: check broker creds, `discovery_prefix`, and that the controller IP is reachable from HA (VLAN/firewall).
-
-- **Scaling looks off** (e.g., hours too small): use `scaling_overrides`, e.g.:
-  ```yaml
-  scaling_overrides: '{"module_hours": 3600, "low_load_hours": 3600}'
-  ```
-
-- **Absolute vs. gauge pressure**: `pressure_bar` is **absolute**. For gauge, create a template sensor in HA subtracting ~1.0 bar.
-
----
-
-## Changelog
-
-- **0.6.0** — 2025-09-04  
-  - Grouped batch polling by **index** with strict token alignment + per-pair fallback.  
-  - Expanded sensor set (VSD buckets, service timers, hours/counters, temps, RPM/current/flow, fan motor binary).  
-  - Added per-sensor `scaling_overrides`.  
-  - Added rich **verbose logging** (QUESTION / tokenization / raw-int-calc lines).
-
-- **0.5.0** — initial public version for pressure, motor starts, load cycles, discovery.
-
----
-
-## License & credits
-
-MIT-style; see repository for details.  
-Thanks to community contributors for MK5s register mapping and test logs.
