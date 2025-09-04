@@ -14,10 +14,18 @@ def vlog(enabled: bool, msg: str) -> None:
 def log_cycle_header(enabled: bool, ip: str) -> None:
     vlog(enabled, f"[mk5s:{ip}] ==== decode cycle @ {time.strftime('%Y-%m-%d %H:%M:%S')} ====")
 
-def log_qna(enabled: bool, ip: str, pair: str, question_hex: str, answer: Optional[str], token: Optional[str]) -> None:
+def log_group_qna(enabled: bool, ip: str, index: str, question_hex: str, answer: Optional[str], cleaned: Optional[str], token_count: int) -> None:
     if not enabled:
         return
-    vlog(True, f"[mk5s:{ip}] Q({pair})={question_hex}  A_raw={repr(answer)}  A_tok={repr(token)}")
+    vlog(True, f"[mk5s:{ip}] Q[{index}]={question_hex}")
+    vlog(True, f"[mk5s:{ip}] A[{index}]_RAW={repr(answer)}")
+    vlog(True, f"[mk5s:{ip}] A[{index}]_CLEAN(len={len(cleaned) if cleaned else 0})={repr(cleaned)} TOKENS={token_count}")
+
+def log_pair_token(enabled: bool, ip: str, pair: str, token: Optional[str], source: str) -> None:
+    if not enabled:
+        return
+    tok = token if token is not None else "None"
+    vlog(True, f"[mk5s:{ip}]   token[{source}] {pair} = {tok}")
 
 def log_value(enabled: bool, ip: str, key: str, pair: str, part: str, raw8: Optional[str], partv: Optional[int], calc: Optional[Any], unit: Optional[str]) -> None:
     if not enabled:
@@ -102,30 +110,87 @@ SENSORS: Dict[str, Dict[str, Any]] = {
     "service_6000_hours":     {"pair":"3009.07","part":"u32","decode":"_service_remaining_6000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service 6000h Remaining"},
 }
 
-PAIR_LIST: List[str] = sorted({meta["pair"].upper() for meta in SENSORS.values()},
-                              key=lambda p: (int(p.split(".")[0],16), int(p.split(".")[1],16)))
+# Group pairs by 4-hex index
+INDEX_GROUPS: Dict[str, List[str]] = {}
+for meta in SENSORS.values():
+    pair = meta["pair"].upper()
+    idx, sub = pair.split(".")
+    INDEX_GROUPS.setdefault(idx, []).append(pair)
+for idx in INDEX_GROUPS:
+    INDEX_GROUPS[idx] = sorted(INDEX_GROUPS[idx], key=lambda p: int(p.split(".")[1], 16))
 
 # ------------------------------ HTTP helpers ---------------------------------
-def question_from_pair(pair: str) -> str:
-    return pair.replace(".","").upper()
+HEX_X_RE = re.compile(r'(X|[0-9A-Fa-f]{8})')
 
-def extract_token(answer_text: Optional[str]) -> Optional[str]:
-    if answer_text is None:
+def clean_answer(s: Optional[str]) -> Optional[str]:
+    if s is None:
         return None
-    cleaned = re.sub(r"[^0-9A-Fa-fX]", "", str(answer_text))
-    m = re.search(r'(X|[0-9A-Fa-f]{8})', cleaned)
-    return m.group(1).upper() if m else None
+    return re.sub(r'[^0-9A-Fa-fX]', '', s)
+
+def tokenize_answer(cleaned: Optional[str], expected_tokens: int) -> List[Optional[str]]:
+    if not cleaned:
+        return []
+    tokens: List[Optional[str]] = []
+    i = 0
+    n = len(cleaned)
+    while i < n and len(tokens) < expected_tokens:
+        ch = cleaned[i]
+        if ch in ('X', 'x'):
+            tokens.append('X')
+            i += 1
+        else:
+            if i + 8 <= n and re.fullmatch(r'[0-9A-Fa-f]{8}', cleaned[i:i+8]):
+                tokens.append(cleaned[i:i+8].upper())
+                i += 8
+            else:
+                # Desync recovery: advance one char
+                i += 1
+    return tokens
+
+def build_group_question(idx: str, subs: List[str]) -> str:
+    # subs like ["3007.01","3007.03"]; build "300701300703..."
+    return "".join(p.replace(".","") for p in subs)
+
+def poll_group(session: requests.Session, ip: str, idx: str, pairs: List[str], timeout: int, verbose: bool) -> Dict[str, Optional[str]]:
+    url = f"http://{ip}/cgi-bin/mkv.cgi"
+    question = build_group_question(idx, pairs)
+    try:
+        r = session.post(url, data={"QUESTION": question}, timeout=timeout)
+        ans_raw = r.text if r.status_code == 200 else None
+    except Exception as e:
+        ans_raw = f"EXC:{e}"
+        cleaned = None
+        log_group_qna(verbose, ip, idx, question, ans_raw, cleaned, 0)
+        return {p: None for p in pairs}
+
+    cleaned = clean_answer(ans_raw)
+    tokens = tokenize_answer(cleaned, expected_tokens=len(pairs))
+    log_group_qna(verbose, ip, idx, question, ans_raw, cleaned, len(tokens))
+
+    out: Dict[str, Optional[str]] = {}
+    for p, tok in zip(pairs, tokens):
+        # 'X' => None, hex8 => hex8, missing => None
+        out[p] = None if tok in (None, 'X') else tok
+        log_pair_token(verbose, ip, p, out[p] if tok not in (None, 'X') else tok, source=f"group:{idx}")
+    # If token list shorter than expected, fill remaining with None
+    if len(tokens) < len(pairs):
+        for p in pairs[len(tokens):]:
+            out[p] = None
+            log_pair_token(verbose, ip, p, None, source=f"group:{idx}:short")
+    return out
 
 def poll_pair(session: requests.Session, ip: str, pair: str, timeout: int, verbose: bool) -> Optional[str]:
     url = f"http://{ip}/cgi-bin/mkv.cgi"
-    q = question_from_pair(pair)
+    q = pair.replace(".","").upper()
     try:
         r = session.post(url, data={"QUESTION": q}, timeout=timeout)
-        token = extract_token(r.text if r.status_code == 200 else None)
-        log_qna(verbose, ip, pair, q, r.text if r is not None else None, token)
-        return token  # 'X' or 8-hex or None
+        cleaned = clean_answer(r.text if r.status_code == 200 else None)
+        m = HEX_X_RE.search(cleaned or "")
+        tok = m.group(1).upper() if m else None
+        log_pair_token(verbose, ip, pair, None if tok == 'X' else tok, source="fallback")
+        return None if tok in (None, 'X') else tok
     except Exception as e:
-        log_qna(verbose, ip, pair, q, f"EXC:{e}", None)
+        log_pair_token(verbose, ip, pair, f"EXC:{e}", source="fallback")
         return None
 
 def decode_part(u32_hex: str, part: str) -> Optional[int]:
@@ -199,13 +264,21 @@ def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbo
 
     while not stop_event.is_set():
         log_cycle_header(verbose, ip)
-        # 1) Read every required pair individually to avoid misalignment
-        pair_raw: Dict[str, Optional[str]] = {}
-        for pair in PAIR_LIST:
-            tok = poll_pair(session, ip, pair, timeout, verbose)
-            pair_raw[pair] = None if tok in (None, 'X') else tok
 
-        # 2) Decode & publish
+        # 1) Poll by **index group** in stable, sorted subindex order
+        pair_raw: Dict[str, Optional[str]] = {}
+        for idx, pairs in INDEX_GROUPS.items():
+            group_map = poll_group(session, ip, idx, pairs, timeout, verbose)
+            pair_raw.update(group_map)
+
+        # 2) Fallback for any None results: try per-pair
+        for pair, tok in list(pair_raw.items()):
+            if tok is None:
+                tok2 = poll_pair(session, ip, pair, timeout, verbose)  # may stay None
+                if tok2 is not None:
+                    pair_raw[pair] = tok2
+
+        # 3) Decode & publish
         for key, meta in SENSORS.items():
             pair = meta["pair"].upper()
             raw8 = pair_raw.get(pair)
