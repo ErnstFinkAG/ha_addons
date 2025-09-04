@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # MK5s Client — Home Assistant add-on
-# VERSION: 0.6.2-grouped-index-2025-09-04
+# VERSION: 0.7.0-working-3007-multipass-2025-09-04
 
-import os, json, threading, time, signal, re, hashlib, sys
-from typing import Dict, Any, List, Optional
+import os, json, threading, time, signal, re, hashlib
+from typing import Dict, Any, List, Optional, Tuple
 import requests
 import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
 SELF_PATH = __file__
-VERSION = "0.6.2-grouped-index-2025-09-04"
+VERSION = "0.7.0-working-3007-multipass-2025-09-04"
 
 def file_sha256(path: str) -> str:
     h = hashlib.sha256()
@@ -23,7 +23,7 @@ def vlog(enabled: bool, msg: str) -> None:
     if enabled:
         print(msg, flush=True)
 
-def log_banner(enabled: bool) -> None:
+def log_banner() -> None:
     sha = "unknown"
     try:
         sha = file_sha256(SELF_PATH)[:16]
@@ -34,12 +34,13 @@ def log_banner(enabled: bool) -> None:
 def log_cycle_header(enabled: bool, ip: str) -> None:
     vlog(enabled, f"[mk5s:{ip}] ==== decode cycle @ {time.strftime('%Y-%m-%d %H:%M:%S')} ====")
 
-def log_group_qna(enabled: bool, ip: str, index: str, question_hex: str, answer: Optional[str], cleaned: Optional[str], token_count: int) -> None:
+def log_group_qna(enabled: bool, ip: str, index: str, question_hex: str, answer: Optional[str], cleaned: Optional[str], tokens: List[Optional[str]]) -> None:
     if not enabled:
         return
     vlog(True, f"[mk5s:{ip}] Q[{index}]={question_hex}")
     vlog(True, f"[mk5s:{ip}] A[{index}]_RAW={repr(answer)}")
-    vlog(True, f"[mk5s:{ip}] A[{index}]_CLEAN(len={{len(cleaned) if cleaned else 0}})={repr(cleaned)} TOKENS={{token_count}}")
+    clen = len(cleaned) if cleaned else 0
+    vlog(True, f"[mk5s:{ip}] A[{index}]_CLEAN(len={clen})={repr(cleaned)} TOKENS={len(tokens)}")
 
 def log_pair_token(enabled: bool, ip: str, pair: str, token: Optional[str], source: str) -> None:
     if not enabled:
@@ -52,10 +53,7 @@ def log_value(enabled: bool, ip: str, key: str, pair: str, part: str, raw8: Opti
         return
     raw_disp = raw8 if raw8 is not None else "X/None"
     part_disp = str(partv) if partv is not None else "—"
-    if calc is None:
-        calc_disp = "unknown"
-    else:
-        calc_disp = str(calc) + (unit or "")
+    calc_disp = "unknown" if calc is None else f"{calc}{unit or ''}"
     vlog(True, f"[mk5s:{ip}] {key:<24} pair={pair:<7} part={part:<3} raw={raw_disp:<10} int={part_disp:<12} calc={calc_disp}")
 
 # ------------------------------ Decoders -------------------------------------
@@ -139,18 +137,51 @@ for meta in SENSORS.values():
 for idx in INDEX_GROUPS:
     INDEX_GROUPS[idx] = sorted(INDEX_GROUPS[idx], key=lambda p: int(p.split(".")[1], 16))
 
-# ------------------------------ HTTP helpers ---------------------------------
-HEX_X_RE = re.compile(r'(X|[0-9A-Fa-f]{8})')
+# Special multi-pass strategy for 3007.*
+def permute_3007_order(pairs: List[str]) -> List[List[str]]:
+    # default ascending
+    p_default = list(pairs)
+    # put 0D right after 01 (before 0B/0C)
+    p_better = list(pairs)
+    if "3007.01" in p_better and "3007.0D" in p_better:
+        p_better.remove("3007.0D")
+        ins_at = p_better.index("3007.01") + 1
+        p_better.insert(ins_at, "3007.0D")
+    # only 0D
+    p_only = ["3007.0D"]
+    # put 0B/0C after 0D
+    p_after = list(pairs)
+    for tgt in ["3007.0B","3007.0C"]:
+        if tgt in p_after:
+            p_after.remove(tgt)
+    if "3007.0D" in p_after:
+        idx = p_after.index("3007.0D") + 1
+    else:
+        idx = 0
+    for tgt in ["3007.0B","3007.0C"]:
+        if tgt in pairs:
+            p_after.insert(idx, tgt)
+            idx += 1
+    # unique, keep order
+    seen = set()
+    out = []
+    for lst in [p_default, p_better, p_only, p_after]:
+        key = tuple(lst)
+        if key not in seen:
+            out.append(lst)
+            seen.add(key)
+    return out
 
+# ------------------------------ HTTP helpers ---------------------------------
 def clean_answer(s: Optional[str]) -> Optional[str]:
     if s is None:
         return None
     return re.sub(r'[^0-9A-Fa-fX]', '', s)
 
 def tokenize_answer(cleaned: Optional[str], expected_tokens: int) -> List[Optional[str]]:
-    if not cleaned:
-        return []
     tokens: List[Optional[str]] = []
+    if not cleaned:
+        return tokens
     i = 0
     n = len(cleaned)
     while i < n and len(tokens) < expected_tokens:
@@ -166,30 +197,28 @@ def tokenize_answer(cleaned: Optional[str], expected_tokens: int) -> List[Option
                 i += 1  # resync
     return tokens
 
-def build_group_question(idx: str, subs: List[str]) -> str:
+def build_question(subs: List[str]) -> str:
     return "".join(p.replace(".","") for p in subs)
 
-def poll_group(session: requests.Session, ip: str, idx: str, pairs: List[str], timeout: int, verbose: bool) -> Dict[str, Optional[str]]:
+def http_post(session: requests.Session, ip: str, q: str, timeout: int) -> Tuple[Optional[str], Optional[str]]:
     url = f"http://{ip}/cgi-bin/mkv.cgi"
-    question = build_group_question(idx, pairs)
     try:
-        r = session.post(url, data={"QUESTION": question}, timeout=timeout)
-        ans_raw = r.text if r.status_code == 200 else None
+        r = session.post(url, data={"QUESTION": q}, timeout=timeout)
+        raw = r.text if r.status_code == 200 else None
     except Exception as e:
-        ans_raw = f"EXC:{e}"
-        cleaned = None
-        if verbose:
-            log_group_qna(True, ip, idx, question, ans_raw, cleaned, 0)
-        return {p: None for p in pairs}
+        raw = f"EXC:{e}"
+    cleaned = clean_answer(raw)
+    return raw, cleaned
 
-    cleaned = clean_answer(ans_raw)
+def poll_group(session: requests.Session, ip: str, idx: str, pairs: List[str], timeout: int, verbose: bool) -> Dict[str, Optional[str]]:
+    q = build_question(pairs)
+    raw, cleaned = http_post(session, ip, q, timeout)
     tokens = tokenize_answer(cleaned, expected_tokens=len(pairs))
-    log_group_qna(verbose, ip, idx, question, ans_raw, cleaned, len(tokens))
-
+    log_group_qna(verbose, ip, idx, q, raw, cleaned, tokens)
     out: Dict[str, Optional[str]] = {}
     for p, tok in zip(pairs, tokens):
         out[p] = None if tok in (None, 'X') else tok
-        log_pair_token(verbose, ip, p, out[p] if tok not in (None, 'X') else tok, source=f"group:{idx}")
+        log_pair_token(verbose, ip, p, out[p] if tok not in (None,'X') else tok, source=f"group:{idx}")
     if len(tokens) < len(pairs):
         for p in pairs[len(tokens):]:
             out[p] = None
@@ -197,18 +226,12 @@ def poll_group(session: requests.Session, ip: str, idx: str, pairs: List[str], t
     return out
 
 def poll_pair(session: requests.Session, ip: str, pair: str, timeout: int, verbose: bool) -> Optional[str]:
-    url = f"http://{ip}/cgi-bin/mkv.cgi"
-    q = pair.replace(".","").upper()
-    try:
-        r = session.post(url, data={"QUESTION": q}, timeout=timeout)
-        cleaned = clean_answer(r.text if r.status_code == 200 else None)
-        m = HEX_X_RE.search(cleaned or "")
-        tok = m.group(1).upper() if m else None
-        log_pair_token(verbose, ip, pair, None if tok == 'X' else tok, source="fallback")
-        return None if tok in (None, 'X') else tok
-    except Exception as e:
-        log_pair_token(verbose, ip, pair, f"EXC:{e}", source="fallback")
-        return None
+    q = build_question([pair])
+    raw, cleaned = http_post(session, ip, q, timeout)
+    tokens = tokenize_answer(cleaned, expected_tokens=1)
+    tok = tokens[0] if tokens else None
+    log_pair_token(verbose, ip, pair, None if tok in (None,'X') else tok, source="fallback")
+    return None if tok in (None,'X') else tok
 
 def decode_part(u32_hex: str, part: str) -> Optional[int]:
     try:
@@ -264,6 +287,45 @@ def publish_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_pre
 
 stop_event = threading.Event()
 
+def plausible_module_seconds(v_hex: Optional[str], alt_hex: Optional[str]) -> bool:
+    if not v_hex or len(v_hex) != 8 or v_hex.upper() == "XXXXXXXX":
+        return False
+    try:
+        v = int(v_hex, 16)
+    except Exception:
+        return False
+    # Must be > ~1000 seconds and < 10 years (in seconds)
+    return (v > 1000) and (v < 10 * 365 * 24 * 3600) and (v_hex != (alt_hex or ""))
+
+def choose_best_3007(pass_maps: List[Dict[str, Optional[str]]]) -> Dict[str, Optional[str]]:
+    # prefer a pass where 0D is plausible and != 14
+    best = pass_maps[0]
+    score_best = -1
+    for m in pass_maps:
+        v0d = m.get("3007.0D")
+        v14 = m.get("3007.14")
+        score = 0
+        if v0d and v0d != "X":
+            try:
+                iv = int(v0d, 16)
+                if iv > 1000:
+                    score += 2
+                if iv > 1000000:  # ~277h
+                    score += 2
+            except Exception:
+                pass
+        if v0d and v14 and v0d != v14:
+            score += 2
+        # fan_starts/acc_vol non-X help too
+        if m.get("3007.0B") not in (None, "X"):
+            score += 1
+        if m.get("3007.0C") not in (None, "X"):
+            score += 1
+        if score > score_best:
+            best = m
+            score_best = score
+    return best
+
 def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
            mqtt_settings: dict, scaling_overrides: Dict[str, float]):
     base_slug = slugify(name or ip)
@@ -282,20 +344,52 @@ def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbo
     while not stop_event.is_set():
         log_cycle_header(verbose, ip)
 
-        # 1) Poll by **index group** in stable, sorted subindex order
-        pair_raw: Dict[str, Optional[str]] = {}
-        for idx, pairs in INDEX_GROUPS.items():
-            group_map = poll_group(session, ip, idx, pairs, timeout, verbose)
-            pair_raw.update(group_map)
+        # --- PRIME READ --- (stabilize pages)
+        try:
+            prime_pairs = ["3003.01", "3003.02", "3003.0A", "3009.01"]
+            q_prime = build_question(prime_pairs)
+            raw_p, cleaned_p = http_post(session, ip, q_prime, timeout)
+            if verbose:
+                print(f"[mk5s:{ip}] PRIME_Q={q_prime}", flush=True)
+                print(f"[mk5s:{ip}] PRIME_A_RAW={repr(raw_p)}", flush=True)
+                print(f"[mk5s:{ip}] PRIME_A_CLEAN={repr(cleaned_p)}", flush=True)
+        except Exception as e:
+            if verbose:
+                print(f"[mk5s:{ip}] PRIME_EXC={e}", flush=True)
 
-        # 2) Fallback for any None results: try per-pair
+        pair_raw: Dict[str, Optional[str]] = {}
+
+        # Normal groups except 3007
+        for idx, pairs in INDEX_GROUPS.items():
+            if idx == "3007":
+                continue
+            gmap = poll_group(session, ip, idx, pairs, timeout, verbose)
+            pair_raw.update(gmap)
+
+        # 3007 multi-pass
+        pairs_3007 = INDEX_GROUPS.get("3007", [])
+        pass_maps: List[Dict[str, Optional[str]]] = []
+        for order in permute_3007_order(pairs_3007):
+            gmap = poll_group(session, ip, "3007", order, timeout, verbose)
+            pass_maps.append(gmap)
+        # Deep-read fallback for 0D if still implausible
+        best = choose_best_3007(pass_maps)
+        if not plausible_module_seconds(best.get("3007.0D"), best.get("3007.14")):
+            tok = poll_pair(session, ip, "3007.0D", timeout, verbose)
+            if tok is not None:
+                best["3007.0D"] = tok
+                log_pair_token(verbose, ip, "3007.0D", tok, source="deep")
+
+        pair_raw.update(best)
+
+        # Per-pair fallback for any remaining None
         for pair, tok in list(pair_raw.items()):
             if tok is None:
-                tok2 = poll_pair(session, ip, pair, timeout, verbose)  # may stay None
+                tok2 = poll_pair(session, ip, pair, timeout, verbose)
                 if tok2 is not None:
                     pair_raw[pair] = tok2
 
-        # 3) Decode & publish
+        # Decode & publish
         for key, meta in SENSORS.items():
             pair = meta["pair"].upper()
             raw8 = pair_raw.get(pair)
@@ -321,6 +415,7 @@ def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbo
             cli.publish(state_topic, "unknown" if calc is None else str(calc), retain=True)
             log_value(verbose, ip, key, pair, meta["part"], raw8, partv, calc, meta.get("unit"))
 
+        # Sleep
         for _ in range(int(interval * 10)):
             if stop_event.is_set():
                 break
@@ -360,7 +455,7 @@ def main():
         "discovery_prefix": opts.get("discovery_prefix", "homeassistant"),
     }
 
-    log_banner(True)
+    log_banner()
 
     threads: List[threading.Thread] = []
     for i, ip in enumerate(ip_list):
