@@ -1,225 +1,326 @@
 #!/usr/bin/env python3
-import os, json, threading, time, signal, sys, re
+import os, json, threading, time, signal
+from typing import Dict, Any, List, Optional, Tuple
 import requests
 import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
 
-DEFAULT_QUESTION = "30020130020330020530020830030130030230030a30070130070330070430070530070630070730070830070930070b30070c30070d30070e30070f30071430071530071830072230072330072430210130210530210a300501300502300504300505300507300508300509300e03300e04300e2a300e8831130131130331130431130531130731130831130931130a31130b31130c31130d31130e31130f31131031131131131231131331131431131531131631131731131831131931131a31131b31131c31131d31131e31131f31132031132131132231132331132431132531132631132731132831132931132a31132b31132c31132d31132e31132f31133031133131133231133331133431133531133631133731133831133931133a31133b31133c31133d31133e31133f31134031134131134231134331134431134531134631134731134831134931134a31134b31134c31134d31134e31134f31135031135131135231135331135431135531135631135731135831135931135a31135b31135c31135d31135e31135f31136031136131136231136331136431136531136631136731140131140231140331140431140531140631140731140831140931140a31140b31140c31140d31140e31140f311410311411311412300901300906300907300108"
+# --- Sensor definitions -------------------------------------------------------
+# Each sensor entry describes:
+# - pair: "<index>.<subindex>"
+# - part: "u32" (full 32 bits), "hi" (high U16), "lo" (low U16)
+# - decode: function name applied after extracting part
+# - unit: Home Assistant unit_of_meas
+# - device_class: Home Assistant device class (optional)
+# - state_class: Home Assistant state class (optional)
+# - kind: "sensor" (default) or "binary_sensor"
+# - name: Friendly name suffix
+# - suggested_display_precision: (optional)
+#
+# Decoders below convert the raw integer to a Python number.
+def _id(v: int) -> int:
+    return v
 
-CONFIRMED_KEYS = {
-    "pressure_bar": "3002.01",   # HiU16 / 1000
-    "motor_starts": "3007.03",    # LoU16
-    "load_cycles":  "3007.04",    # LoU16
+def _div10(v: int) -> float:
+    return round(v / 10.0, 1)
+
+def _div1000(v: int) -> float:
+    return round(v / 1000.0, 3)
+
+def _hours_from_seconds_u32(v: int) -> float:
+    return round(v / 3600.0, 1)
+
+def _percent_from_bucket(v: int) -> float:
+    # As provided: UInt32 / 65,831,881 × 100
+    return round((v / 65831881.0) * 100.0, 2)
+
+def _service_remaining_3000(v: int) -> float:
+    return max(0.0, round(3000.0 - (v / 3600.0), 1))
+
+def _service_remaining_6000(v: int) -> float:
+    return max(0.0, round(6000.0 - (v / 3600.0), 1))
+
+def _times1000(v: int) -> int:
+    return v * 1000
+
+SENSORS: Dict[str, Dict[str, Any]] = {
+    "machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"},
+    "pressure_bar":           {"pair":"3002.01","part":"hi", "decode":"_div1000","unit":"bar","device_class":"pressure","state_class":"measurement","name":"Pressure"},
+    "element_outlet":         {"pair":"3002.03","part":"hi", "decode":"_div10","unit":"°C","device_class":"temperature","state_class":"measurement","name":"Element Outlet"},
+    "ambient_air":            {"pair":"3002.05","part":"hi", "decode":"_div10","unit":"°C","device_class":"temperature","state_class":"measurement","name":"Ambient Air"},
+    "controller_temperature": {"pair":"3002.08","part":"hi", "decode":"_div10","unit":"°C","device_class":"temperature","state_class":"measurement","name":"Controller Temperature"},
+    "fan_motor":              {"pair":"3005.01","part":"hi", "decode":"_id","unit":None,"device_class":"running","state_class":None,"kind":"binary_sensor","name":"Fan Motor"},
+    "running_hours":          {"pair":"3007.01","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Running Hours"},
+    "motor_starts":           {"pair":"3007.03","part":"lo", "decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Motor Starts"},
+    "load_cycles":            {"pair":"3007.04","part":"lo", "decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Load Cycles"},
+    "vsd_1_20":               {"pair":"3007.05","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 1–20%"},
+    "vsd_20_40":              {"pair":"3007.06","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 20–40%"},
+    "vsd_40_60":              {"pair":"3007.07","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 40–60%"},
+    "vsd_60_80":              {"pair":"3007.08","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 60–80%"},
+    "vsd_80_100":             {"pair":"3007.09","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 80–100%"},
+    "fan_starts":             {"pair":"3007.0B","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Fan Starts"},
+    "accumulated_volume":     {"pair":"3007.0C","part":"u32","decode":"_times1000","unit":"m³","device_class":None,"state_class":"total_increasing","name":"Accumulated Volume"},
+    "module_hours":           {"pair":"3007.0D","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Module Hours"},
+    "emergency_stops":        {"pair":"3007.0E","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Emergency Stops"},
+    "direct_stops":           {"pair":"3007.0F","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Direct Stops"},
+    "recirculation_starts":   {"pair":"3007.14","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Recirculation Starts"},
+    "recirculation_failures": {"pair":"3007.15","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Recirculation Failures"},
+    "low_load_hours":         {"pair":"3007.18","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Low Load Hours"},
+    "available_hours":        {"pair":"3007.22","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Available Hours"},
+    "unavailable_hours":      {"pair":"3007.23","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Unavailable Hours"},
+    "emergency_stop_hours":   {"pair":"3007.24","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Emergency Stop Hours"},
+    "rpm_actual":             {"pair":"3021.01","part":"hi", "decode":"_id","unit":"rpm","device_class":None,"state_class":"measurement","name":"RPM Actual"},
+    "rpm_requested":          {"pair":"3021.01","part":"lo", "decode":"_id","unit":"rpm","device_class":None,"state_class":"measurement","name":"RPM Requested"},
+    "current":                {"pair":"3021.05","part":"lo", "decode":"_id","unit":"A","device_class":"current","state_class":"measurement","name":"Current"},
+    "flow":                   {"pair":"3021.0A","part":"hi", "decode":"_id","unit":"%","device_class":None,"state_class":"measurement","name":"Flow"},
+    "service_3000_hours":     {"pair":"3009.06","part":"u32","decode":"_service_remaining_3000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service 3000h Remaining"},
+    "service_6000_hours":     {"pair":"3009.07","part":"u32","decode":"_service_remaining_6000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service 6000h Remaining"},
+}
+
+# Helper to group by pair
+PAIR_TO_KEYS: Dict[str, List[str]] = {}
+for key, meta in SENSORS.items():
+    PAIR_TO_KEYS.setdefault(meta["pair"].upper(), []).append(key)
+
+# Build the default QUESTION string by concatenating all pairs (6 hex chars each)
+DEFAULT_QUESTION = "".join(p.replace(".","") for p in PAIR_TO_KEYS.keys())
+
+# Decoder dispatch
+DECODERS = {
+    "_id": _id,
+    "_div10": _div10,
+    "_div1000": _div1000,
+    "_hours_from_seconds_u32": _hours_from_seconds_u32,
+    "_percent_from_bucket": _percent_from_bucket,
+    "_service_remaining_3000": _service_remaining_3000,
+    "_service_remaining_6000": _service_remaining_6000,
+    "_times1000": _times1000,
 }
 
 stop_event = threading.Event()
 
-def slugify(name: str) -> str:
-    s = name.strip().lower()
-    s = re.sub(r"[^a-z0-9]+", "_", s)
-    s = re.sub(r"_+", "_", s).strip("_")
-    return s or "mk5s"
+def slugify(s: str) -> str:
+    return "".join(c.lower() if (c.isalnum() or c in "-_") else "_" for c in (s or ""))
 
-def parse_csv_list(s: str):
-    if s is None:
-        return []
-    return [x.strip() for x in s.split(",")] if s.strip() else []
+def csv_list(s: str) -> List[str]:
+    return [x.strip() for x in s.split(",")] if s and s.strip() else []
 
-def build_question_pairs(question_hex: str):
+def build_question_pairs(question_hex: str) -> List[str]:
     pairs = []
+    question_hex = question_hex.strip()
     for i in range(0, len(question_hex), 6):
         chunk = question_hex[i:i+6]
         if len(chunk) != 6:
             break
-        idx = chunk[:4].upper()
-        si  = chunk[4:6].upper()
-        pairs.append(f"{idx}.{si}")
+        pairs.append(f"{chunk[:4].upper()}.{chunk[4:6].upper()}")
     return pairs
 
-def parse_answer(answer_hex: str, pairs):
-    out = {}
-    ia = 0
-    for key in pairs:
-        if ia >= len(answer_hex):
-            out[key] = None
+def parse_answer(answer_hex: str, pairs: List[str]) -> Dict[str, Optional[str]]:
+    """
+    Parse controller answer. For each requested pair we either get 'X' (missing) or 8 hex chars.
+    Returns mapping pair -> 8-hex string (uppercase) or None.
+    """
+    out: Dict[str, Optional[str]] = {}
+    i = 0
+    for p in pairs:
+        if i >= len(answer_hex):
+            out[p] = None
             continue
-        ch = answer_hex[ia]
-        if ch == 'X':
-            out[key] = None
-            ia += 1
+        ch = answer_hex[i]
+        if ch == "X":
+            out[p] = None
+            i += 1
         else:
-            if ia + 8 <= len(answer_hex):
-                out[key] = answer_hex[ia:ia+8].upper()
-                ia += 8
+            if i + 8 <= len(answer_hex):
+                out[p] = answer_hex[i:i+8].upper()
+                i += 8
             else:
-                out[key] = None
-                ia = len(answer_hex)
+                out[p] = None
     return out
 
-def u16_hi(raw8: str):
-    return int(raw8[0:4], 16)
+def decode_part(u32_hex: str, part: str) -> Optional[int]:
+    try:
+        v = int(u32_hex, 16)
+    except Exception:
+        return None
+    if part == "u32":
+        return v
+    elif part == "hi":
+        return (v >> 16) & 0xFFFF
+    elif part == "lo":
+        return v & 0xFFFF
+    else:
+        return None
 
-def u16_lo(raw8: str):
-    return int(raw8[4:8], 16)
-
-def post_question(ip: str, question_hex: str, timeout: int):
-    url = f"http://{ip}/cgi-bin/mkv.cgi"
-    r = requests.post(url, data={"QUESTION": question_hex}, timeout=timeout)
-    r.raise_for_status()
-    return r.text.strip(), r.headers
-
-def publish_discovery(cli: mqtt.Client, base_slug: str, name: str, disc_prefix: str):
+def publish_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix: str):
     device = {
-        "identifiers": [f"mk5s_{base_slug}"],
+        "ids": [f"mk5s_{base_slug}"],
+        "mf": "Atlas Copco",
+        "mdl": "MK5s Touch",
         "name": name,
-        "manufacturer": "Atlas Copco",
-        "model": "MK5s Touch",
     }
-    base_topic = f"{base_slug}"
-    avail_topic = f"{base_topic}/availability"
-    sensors = [
-        ("pressure_bar", "Pressure", "pressure_bar", "bar", "measurement", "pressure"),
-        ("motor_starts", "Motor Starts", "motor_starts", None, "total_increasing", None),
-        ("load_cycles",  "Load Cycles", "load_cycles", None, "total_increasing", None),
-    ]
-    for sensor_id, nice, state_key, unit, state_class, device_class in sensors:
-        conf_topic = f"{disc_prefix}/sensor/{base_slug}/{sensor_id}/config"
-        payload = {
-            "name": f"{name} {nice}",
+    avail_topic = f"{base_slug}/availability"
+
+    for key, meta in SENSORS.items():
+        is_binary = (meta.get("kind", "sensor") == "binary_sensor")
+        platform = "binary_sensor" if is_binary else "sensor"
+        sensor_id = key
+        state_key = key
+        conf_topic = f"{discovery_prefix}/{platform}/{base_slug}/{sensor_id}/config"
+        state_topic = f"{base_slug}/{state_key}"
+
+        payload: Dict[str, Any] = {
+            "name": f"{name} {meta.get('name', key.replace('_',' ').title())}",
             "uniq_id": f"{base_slug}_{sensor_id}",
-            "stat_t": f"{base_topic}/{state_key}",
+            "stat_t": state_topic,
             "avty_t": avail_topic,
             "dev": device,
             "qos": 0,
-            "ret": True,
         }
+        unit = meta.get("unit")
         if unit:
             payload["unit_of_meas"] = unit
-        if state_class:
-            payload["stat_cla"] = state_class
-        if device_class:
-            payload["dev_cla"] = device_class
+        if meta.get("state_class"):
+            payload["stat_cla"] = meta["state_class"]
+        if meta.get("device_class"):
+            payload["dev_cla"] = meta["device_class"]
+
+        if is_binary:
+            payload["pl_on"] = "1"
+            payload["pl_off"] = "0"
+
         cli.publish(conf_topic, json.dumps(payload), retain=True)
+
+def format_state(value: Any) -> str:
+    if value is None:
+        return "unknown"
+    return str(value)
+
+def poll_once(ip: str, timeout: int, question_hex: str) -> Optional[str]:
+    url = f"http://{ip}/cgi-bin/mkv.cgi"
+    try:
+        r = requests.post(url, data={"QUESTION": question_hex}, timeout=timeout)
+        if r.status_code == 200:
+            return r.text.strip()
+        else:
+            return None
+    except Exception:
+        return None
 
 def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
            mqtt_settings: dict, question_hex: str):
     base_slug = slugify(name or ip)
-    question_hex = (question_hex or DEFAULT_QUESTION).strip()
-    pairs = build_question_pairs(question_hex)
+    pairs = build_question_pairs(question_hex or DEFAULT_QUESTION)
 
     cli = mqtt.Client(client_id=f"mk5s_{base_slug}", clean_session=True)
-    cli.username_pw_set(mqtt_settings["user"], mqtt_settings["password"])
+    if mqtt_settings.get("user") or mqtt_settings.get("password"):
+        cli.username_pw_set(mqtt_settings.get("user",""), mqtt_settings.get("password",""))
     avail_topic = f"{base_slug}/availability"
     cli.will_set(avail_topic, payload="offline", retain=True)
-
     cli.connect(mqtt_settings["host"], int(mqtt_settings["port"]), keepalive=60)
-    cli.loop_start()
 
-    publish_discovery(cli, base_slug, name or ip, mqtt_settings["discovery_prefix"])
+    # Publish discovery once
+    publish_discovery(cli, base_slug, name, mqtt_settings["discovery_prefix"])
     cli.publish(avail_topic, "online", retain=True)
 
     while not stop_event.is_set():
-        try:
-            ans, hdrs = post_question(ip, question_hex, timeout)
-            if verbose:
-                print("Question:"); print(question_hex)
-                print("Answer:"); print(ans)
-            mapa = parse_answer(ans, pairs)
-            def get_raw(key):
-                kk = CONFIRMED_KEYS[key]
-                return mapa.get(kk)
-            raw_pressure = get_raw("pressure_bar")
-            raw_ms = get_raw("motor_starts")
-            raw_lc = get_raw("load_cycles")
-
-            pressure_val = round(u16_hi(raw_pressure)/1000.0, 3) if raw_pressure else None
-            ms_val = u16_lo(raw_ms) if raw_ms else None
-            lc_val = u16_lo(raw_lc) if raw_lc else None
-
-            if verbose:
-                print(f"[values] {name}: pressure={pressure_val if pressure_val is not None else '—'} bar, motor_starts={ms_val if ms_val is not None else '—'}, load_cycles={lc_val if lc_val is not None else '—'}")
-
-            if pressure_val is not None:
-                cli.publish(f"{base_slug}/pressure_bar", str(pressure_val), retain=True)
-            if ms_val is not None:
-                cli.publish(f"{base_slug}/motor_starts", str(ms_val), retain=True)
-            if lc_val is not None:
-                cli.publish(f"{base_slug}/load_cycles", str(lc_val), retain=True)
-
-            cli.publish(avail_topic, "online", retain=True)
-        except Exception as e:
-            print(f"[mk5s] poll error for {ip}: {e}", file=sys.stderr)
-            try: cli.publish(avail_topic, "offline", retain=True)
-            except Exception: pass
+        answer = poll_once(ip, timeout, question_hex or DEFAULT_QUESTION)
+        if verbose:
+            print(f"[mk5s:{ip}] QUESTION={question_hex or DEFAULT_QUESTION}")
+            print(f"[mk5s:{ip}] ANSWER={answer!r}")
+        if answer:
+            parsed = parse_answer(answer, pairs)
+            # Decode and publish each sensor
+            for key, meta in SENSORS.items():
+                p = meta["pair"].upper()
+                raw = parsed.get(p)
+                if raw is None:
+                    value = None
+                else:
+                    partv = decode_part(raw, meta["part"])
+                    if partv is None:
+                        value = None
+                    else:
+                        dec = DECODERS[meta["decode"]]
+                        try:
+                            value = dec(partv)
+                        except Exception:
+                            value = None
+                state_topic = f"{base_slug}/{key}"
+                cli.publish(state_topic, format_state(value), retain=True)
+        else:
+            # Could not talk to host; mark offline
+            cli.publish(avail_topic, "offline", retain=True)
 
         for _ in range(int(interval*10)):
-            if stop_event.is_set(): break
+            if stop_event.is_set():
+                break
             time.sleep(0.1)
 
-    try: cli.publish(avail_topic, "offline", retain=True)
-    except Exception: pass
-    cli.loop_stop()
-    try: cli.disconnect()
-    except Exception: pass
-
 def main():
-    if not os.path.exists(OPTIONS_PATH):
-        print("[mk5s] options.json not found; using defaults for single host")
-        opts = {}
-    else:
-        with open(OPTIONS_PATH, "r", encoding="utf-8") as f:
+    try:
+        with open(OPTIONS_PATH, "r") as f:
             opts = json.load(f)
+    except Exception:
+        # Defaults for local testing
+        opts = {}
 
-    ip_list        = parse_csv_list(opts.get("ip_list", ""))
-    name_list      = parse_csv_list(opts.get("name_list", ""))
-    interval_list  = parse_csv_list(opts.get("interval_list", ""))
-    timeout_list   = parse_csv_list(opts.get("timeout_list", ""))
-    verbose_list   = parse_csv_list(opts.get("verbose_list", ""))
-    question_list  = parse_csv_list(opts.get("question_list", ""))
-
-    default_question = (opts.get("question") or DEFAULT_QUESTION).strip()
+    ip_list = csv_list(opts.get("ip_list", ""))
+    name_list = csv_list(opts.get("name_list", ""))
+    interval_list = csv_list(opts.get("interval_list", ""))
+    timeout_list = csv_list(opts.get("timeout_list", ""))
+    verbose_list = csv_list(opts.get("verbose_list", ""))
+    default_question = (opts.get("question") or DEFAULT_QUESTION).strip().upper()
+    question_list = csv_list(opts.get("question_list", ""))
 
     if not ip_list:
         ip_list = ["10.60.23.11"]
-    n = len(ip_list)
 
-    def pick(lst, i, default):
-        if not lst: return default
+    def pick(lst: List[str], i: int, default: str) -> str:
+        if not lst:
+            return default
         return lst[i] if i < len(lst) and lst[i] != "" else (lst[-1] if lst[-1] != "" else default)
 
     mqtt_settings = {
         "host": opts.get("mqtt_host", "localhost"),
         "port": opts.get("mqtt_port", 1883),
-        "user": opts.get("mqtt_user", "mqtt_user"),
-        "password": opts.get("mqtt_password", "mqtt_password"),
+        "user": opts.get("mqtt_user", ""),
+        "password": opts.get("mqtt_password", ""),
         "discovery_prefix": opts.get("discovery_prefix", "homeassistant"),
     }
 
-    threads = []
-    for i in range(n):
-        ip = ip_list[i]
+    threads: List[threading.Thread] = []
+    for i, ip in enumerate(ip_list):
         name = pick(name_list, i, ip)
-        try: interval = int(pick(interval_list, i, "10"))
-        except: interval = 10
-        try: timeout = int(pick(timeout_list, i, "5"))
-        except: timeout = 5
+        try:
+            interval = int(pick(interval_list, i, "10"))
+        except:
+            interval = 10
+        try:
+            timeout = int(pick(timeout_list, i, "5"))
+        except:
+            timeout = 5
         verbose = pick(verbose_list, i, "false").lower() in ("1","true","yes","on")
-        qh = pick(question_list, i, default_question) or default_question
-
+        qh = (pick(question_list, i, default_question) or default_question).upper()
+        # If user specified a question that doesn't include all default pairs, it's fine.
         print(f"[mk5s] starting: host={ip} name={name} interval={interval}s timeout={timeout} verbose={verbose}")
         t = threading.Thread(target=worker, args=(i, ip, name, interval, timeout, verbose, mqtt_settings, qh), daemon=True)
-        threads.append(t); t.start()
+        threads.append(t)
+        t.start()
 
-    def handle_sigterm(signum, frame): stop_event.set()
+    def handle_sigterm(signum, frame):
+        stop_event.set()
     signal.signal(signal.SIGTERM, handle_sigterm)
     signal.signal(signal.SIGINT, handle_sigterm)
 
     try:
-        while not stop_event.is_set(): time.sleep(0.5)
+        while not stop_event.is_set():
+            time.sleep(0.5)
     finally:
         stop_event.set()
-        for t in threads: t.join(timeout=5.0)
+        for t in threads:
+            t.join(timeout=5.0)
 
 if __name__ == "__main__":
     main()
