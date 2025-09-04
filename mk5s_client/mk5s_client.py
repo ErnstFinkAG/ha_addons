@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os, json, threading, time, signal, re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import requests
 import paho.mqtt.client as mqtt
 
@@ -14,12 +14,10 @@ def vlog(enabled: bool, msg: str) -> None:
 def log_cycle_header(enabled: bool, ip: str) -> None:
     vlog(enabled, f"[mk5s:{ip}] ==== decode cycle @ {time.strftime('%Y-%m-%d %H:%M:%S')} ====")
 
-def log_qna(enabled: bool, ip: str, question_hex: str, raw_answer: Optional[str], cleaned_answer: Optional[str]) -> None:
+def log_qna(enabled: bool, ip: str, pair: str, question_hex: str, answer: Optional[str], token: Optional[str]) -> None:
     if not enabled:
         return
-    vlog(True, f"[mk5s:{ip}] QUESTION={question_hex}")
-    vlog(True, f"[mk5s:{ip}] ANSWER_RAW={repr(raw_answer)}")
-    vlog(True, f"[mk5s:{ip}] ANSWER_CLEAN={repr(cleaned_answer)}")
+    vlog(True, f"[mk5s:{ip}] Q({pair})={question_hex}  A_raw={repr(answer)}  A_tok={repr(token)}")
 
 def log_value(enabled: bool, ip: str, key: str, pair: str, part: str, raw8: Optional[str], partv: Optional[int], calc: Optional[Any], unit: Optional[str]) -> None:
     if not enabled:
@@ -104,62 +102,31 @@ SENSORS: Dict[str, Dict[str, Any]] = {
     "service_6000_hours":     {"pair":"3009.07","part":"u32","decode":"_service_remaining_6000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service 6000h Remaining"},
 }
 
-PAIR_TO_KEYS: Dict[str, List[str]] = {}
-for key, meta in SENSORS.items():
-    PAIR_TO_KEYS.setdefault(meta["pair"].upper(), []).append(key)
+PAIR_LIST: List[str] = sorted({meta["pair"].upper() for meta in SENSORS.values()},
+                              key=lambda p: (int(p.split(".")[0],16), int(p.split(".")[1],16)))
 
-# Build a union QUESTION string (user override plus all required pairs)
-def build_question_pairs(question_hex: str) -> List[str]:
-    pairs: List[str] = []
-    question_hex = question_hex.strip()
-    for i in range(0, len(question_hex), 6):
-        chunk = question_hex[i:i+6]
-        if len(chunk) != 6:
-            break
-        pairs.append(f"{chunk[:4].upper()}.{chunk[4:6].upper()}")
-    return pairs
+# ------------------------------ HTTP helpers ---------------------------------
+def question_from_pair(pair: str) -> str:
+    return pair.replace(".","").upper()
 
-def build_question_hex(user_hex: Optional[str]) -> str:
-    needed = set(PAIR_TO_KEYS.keys())
-    have = set()
-    if user_hex and user_hex.strip():
-        for p in build_question_pairs(user_hex):
-            have.add(p.upper())
-    wanted = needed | have
-    def sort_key(p: str):
-        idx, sub = p.split(".")
-        return (int(idx, 16), int(sub, 16))
-    return "".join(p.replace(".", "") for p in sorted(wanted, key=sort_key))
-
-DEFAULT_QUESTION = build_question_hex(None)
-
-def parse_answer(answer_text: Optional[str]) -> Optional[str]:
+def extract_token(answer_text: Optional[str]) -> Optional[str]:
     if answer_text is None:
         return None
-    # Keep only HEX and 'X', uppercase
-    cleaned = re.sub(r"[^0-9A-FX]", "", str(answer_text).upper())
-    return cleaned
+    cleaned = re.sub(r"[^0-9A-Fa-fX]", "", str(answer_text))
+    m = re.search(r'(X|[0-9A-Fa-f]{8})', cleaned)
+    return m.group(1).upper() if m else None
 
-def parse_answer_by_pairs(answer_hex: str, pairs: List[str]) -> Dict[str, Optional[str]]:
-    out: Dict[str, Optional[str]] = {}
-    i = 0
-    n = len(answer_hex)
-    for _ in pairs:
-        if i >= n:
-            out[_] = None
-            continue
-        ch = answer_hex[i]
-        if ch == "X":
-            out[_] = None
-            i += 1
-        else:
-            if i + 8 <= n:
-                out[_] = answer_hex[i:i+8]
-                i += 8
-            else:
-                out[_] = None
-                i = n
-    return out
+def poll_pair(session: requests.Session, ip: str, pair: str, timeout: int, verbose: bool) -> Optional[str]:
+    url = f"http://{ip}/cgi-bin/mkv.cgi"
+    q = question_from_pair(pair)
+    try:
+        r = session.post(url, data={"QUESTION": q}, timeout=timeout)
+        token = extract_token(r.text if r.status_code == 200 else None)
+        log_qna(verbose, ip, pair, q, r.text if r is not None else None, token)
+        return token  # 'X' or 8-hex or None
+    except Exception as e:
+        log_qna(verbose, ip, pair, q, f"EXC:{e}", None)
+        return None
 
 def decode_part(u32_hex: str, part: str) -> Optional[int]:
     try:
@@ -213,23 +180,11 @@ def publish_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_pre
             payload["pl_off"] = "0"
         cli.publish(conf_topic, json.dumps(payload), retain=True)
 
-def poll_once(ip: str, timeout: int, question_hex: str) -> Optional[str]:
-    url = f"http://{ip}/cgi-bin/mkv.cgi"
-    try:
-        r = requests.post(url, data={"QUESTION": question_hex}, timeout=timeout)
-        if r.status_code == 200:
-            return r.text
-        return None
-    except Exception:
-        return None
-
 stop_event = threading.Event()
 
 def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
-           mqtt_settings: dict, question_hex: str, scaling_overrides: Dict[str, float]):
+           mqtt_settings: dict, scaling_overrides: Dict[str, float]):
     base_slug = slugify(name or ip)
-    pairs = build_question_pairs(question_hex)
-
     cli = mqtt.Client(client_id=f"mk5s_{base_slug}", clean_session=True)
     if mqtt_settings.get("user") or mqtt_settings.get("password"):
         cli.username_pw_set(mqtt_settings.get("user",""), mqtt_settings.get("password",""))
@@ -240,43 +195,44 @@ def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbo
     publish_discovery(cli, base_slug, name, mqtt_settings["discovery_prefix"])
     cli.publish(avail_topic, "online", retain=True)
 
+    session = requests.Session()
+
     while not stop_event.is_set():
         log_cycle_header(verbose, ip)
-        raw_answer = poll_once(ip, timeout, question_hex)
-        cleaned = parse_answer(raw_answer)
-        log_qna(verbose, ip, question_hex, raw_answer, cleaned)
+        # 1) Read every required pair individually to avoid misalignment
+        pair_raw: Dict[str, Optional[str]] = {}
+        for pair in PAIR_LIST:
+            tok = poll_pair(session, ip, pair, timeout, verbose)
+            pair_raw[pair] = None if tok in (None, 'X') else tok
 
-        if cleaned:
-            parsed = parse_answer_by_pairs(cleaned, pairs)
-            for key, meta in SENSORS.items():
-                pair = meta["pair"].upper()
-                raw8 = parsed.get(pair)
-                if raw8 is None:
-                    partv = None
+        # 2) Decode & publish
+        for key, meta in SENSORS.items():
+            pair = meta["pair"].upper()
+            raw8 = pair_raw.get(pair)
+            if raw8 is None:
+                partv = None
+                calc = None
+            else:
+                partv = decode_part(raw8, meta["part"])
+                if partv is None:
                     calc = None
                 else:
-                    partv = decode_part(raw8, meta["part"])
-                    if partv is None:
+                    dec = DECODERS[meta["decode"]]
+                    try:
+                        calc = dec(partv)
+                    except Exception:
                         calc = None
-                    else:
-                        dec = DECODERS[meta["decode"]]
+                    # Optional multiplicative override (for edge variants)
+                    if key in scaling_overrides and isinstance(calc, (int, float)):
                         try:
-                            calc = dec(partv)
+                            calc = calc * float(scaling_overrides[key])
                         except Exception:
-                            calc = None
-                        # Optional multiplicative override (for edge variants)
-                        if key in scaling_overrides and isinstance(calc, (int, float)):
-                            try:
-                                calc = calc * float(scaling_overrides[key])
-                            except Exception:
-                                pass
-                # Publish
-                state_topic = f"{base_slug}/{key}"
-                cli.publish(state_topic, "unknown" if calc is None else str(calc), retain=True)
-                # Verbose line per value
-                log_value(verbose, ip, key, pair, meta["part"], raw8, partv, calc, meta.get("unit"))
-        else:
-            cli.publish(avail_topic, "offline", retain=True)
+                            pass
+            # Publish
+            state_topic = f"{base_slug}/{key}"
+            cli.publish(state_topic, "unknown" if calc is None else str(calc), retain=True)
+            # Verbose line per value
+            log_value(verbose, ip, key, pair, meta["part"], raw8, partv, calc, meta.get("unit"))
 
         # Sleep with stop check
         for _ in range(int(interval * 10)):
@@ -296,8 +252,6 @@ def main():
     interval_list = csv_list(opts.get("interval_list", ""))
     timeout_list = csv_list(opts.get("timeout_list", ""))
     verbose_list = csv_list(opts.get("verbose_list", ""))
-    user_question = (opts.get("question") or "").strip().upper()
-    question_list = csv_list(opts.get("question_list", ""))
 
     # Optional per-sensor multiplicative overrides (e.g., {"module_hours": 1})
     try:
@@ -334,13 +288,9 @@ def main():
             timeout = 5
         verbose = pick(verbose_list, i, "false").lower() in ("1","true","yes","on")
 
-        # Build union of all required pairs with any user-specified pairs
-        qh_user = pick(question_list, i, user_question)
-        question_hex = build_question_hex(qh_user)
-
         print(f"[mk5s] starting: host={ip} name={name} interval={interval}s timeout={timeout} verbose={verbose}")
         t = threading.Thread(target=worker,
-                             args=(i, ip, name, interval, timeout, verbose, mqtt_settings, question_hex, scaling_overrides),
+                             args=(i, ip, name, interval, timeout, verbose, mqtt_settings, scaling_overrides),
                              daemon=True)
         threads.append(t)
         t.start()
