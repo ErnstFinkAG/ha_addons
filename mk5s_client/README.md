@@ -1,44 +1,5 @@
 # Atlas Copco MK5s Touch — Home Assistant Add‑on
 
-**Client script:** `mk5s_client.py v0.8.1` (PS‑sequence parity + entity_id fix)
-
-This add‑on mirrors the proven PowerShell approach with **one single QUESTION** and strict token parsing. It also fixes MQTT Discovery so entity_ids aren’t double‑prefixed in Home Assistant.
-
----
-
-## Quick start
-
-1. Copy `mk5s_client.py` (v0.8.1) into the add‑on.
-2. Configure `/data/options.json` (see **Configuration** below).
-3. Start the add‑on. Home Assistant auto‑discovers the device and sensors.
-
-> If you previously had duplicates like `sensor.<slug>_<slug>_vsd_80_100`, v0.8.1 publishes empty retained configs to legacy topics so HA removes them. If they linger, reload MQTT in HA (Settings → Devices & Services → MQTT → Reload) or restart HA.
-
----
-
-## How it works (PS‑parity)
-
-- The client posts **one single `QUESTION`** to `/cgi-bin/mkv.cgi` using the exact hex sequence below.
-- The controller replies with a stream of tokens:
-  - Each token is either `X` (unavailable) **or** an 8‑hex `UInt32` word.
-  - Parsing is **sequential**: the N‑th token corresponds to the N‑th key of the QUESTION.
-- Tokens are mapped to HA sensors and **decoded** per the rules in the table.
-- If a field for HA is `X`, the client performs a **single‑pair fallback read** just for that pair (e.g., `QUESTION=30070D`).
-
-### Single‑shot QUESTION (exact order)
-```
-300201300203300205300208
-30030130030230030a
-30070130070330070430070530070630070730070830070930070b30070c30070d30070e30070f300714300715300718300722300723300724
-30210130210530210a
-300501300502300504300505300507300508300509
-300e03300e04300e2a300e88
-31130131130331130431130531130731130831130931130a31130b31130c31130d31130e31130f31131031131131131231131331131431131531131631131731131831131931131a31131b31131c31131d31131e31131f31132031132131132231132331132431132531132631132731132831132931132a31132b31132c31132d31132e31132f31133031133131133231133331133431133531133631133731133831133931133a31133b31133c31133d31133e31133f31134031134131134231134331134431134531134631134731134831134931134a31134b31134c31134d31134e31134f31135031135131135231135331135431135531135631135731135831135931135a31135b31135c31135d31135e31135f311360311361311362311363311364311365311366311367
-31140131140231140331140431140531140631140731140831140931140a31140b31140c31140d31140e31140f311410311411311412
-300901300906300907
-300108
-```
-
 ---
 
 ## Full encoding list (MK5s Touch)
