@@ -1,40 +1,22 @@
 name: MK5S Client
-version: "0.3.0"
+version: 0.1.2
 slug: mk5s_client
-description: Poll Atlas Copco MK5S Touch controllers and publish MQTT sensors (Home Assistant Discovery)
-url: https://github.com/ErnstFinkAG/ha_addons
+description: Polls a MK5S controller and logs confirmed-good metrics from an MK5S controller.
 arch:
-  - amd64
   - aarch64
+  - amd64
   - armv7
-init: false
+  - i386
 startup: services
+init: false
 boot: auto
-host_network: true
-ingress: false
-map:
-  - config:rw
 options:
-  hosts: "10.60.23.11"
-  names: "mk5s"
-  intervals: "10"
-  timeouts: "5"
-  verbose: "false"
-  questions: ""
-  mqtt_host: "localhost"
-  mqtt_port: 1883
-  mqtt_user: ""
-  mqtt_password: ""
-  discovery_prefix: "homeassistant"
+  host: 10.60.23.11
+  interval: 10
+  timeout: 5
+  verbose: true
 schema:
-  hosts: str
-  names: str
-  intervals: str
-  timeouts: str
-  verbose: str
-  questions: str?
-  mqtt_host: str?
-  mqtt_port: port?
-  mqtt_user: str?
-  mqtt_password: password?
-  discovery_prefix: str?
+  host: str
+  interval: int
+  timeout: int
+  verbose: bool
