@@ -1,225 +1,234 @@
 #!/usr/bin/env python3
-import os, json, threading, time, signal, sys, re
-import requests
+import os, time, json, threading, requests, re
+import socket
+from typing import List, Dict, Tuple
 import paho.mqtt.client as mqtt
 
-OPTIONS_PATH = "/data/options.json"
+DEFAULT_QUESTION = (
+    # Only confirmed-good keys by default
+    "300201"  # Kompressorauslass (bar, HiU16/1000)
+    "300203"  # Elementauslass (°C, HiU16/10)
+    "300205"  # Umgebungsluft (°C, HiU16/10)
+    "300208"  # Controller Temperature (°C, HiU16/10)
+    "300703"  # Motorstarts (LoU16)
+    "300704"  # Lastspiele (LoU16)
+    "30070B"  # Lüfterstarts (LoU16)
+    "30070C"  # Erzeugte Druckluftmenge (LoU16*1000)
+)
 
-DEFAULT_QUESTION = "30020130020330020530020830030130030230030a30070130070330070430070530070630070730070830070930070b30070c30070d30070e30070f30071430071530071830072230072330072430210130210530210a300501300502300504300505300507300508300509300e03300e04300e2a300e8831130131130331130431130531130731130831130931130a31130b31130c31130d31130e31130f31131031131131131231131331131431131531131631131731131831131931131a31131b31131c31131d31131e31131f31132031132131132231132331132431132531132631132731132831132931132a31132b31132c31132d31132e31132f31133031133131133231133331133431133531133631133731133831133931133a31133b31133c31133d31133e31133f31134031134131134231134331134431134531134631134731134831134931134a31134b31134c31134d31134e31134f31135031135131135231135331135431135531135631135731135831135931135a31135b31135c31135d31135e31135f31136031136131136231136331136431136531136631136731140131140231140331140431140531140631140731140831140931140a31140b31140c31140d31140e31140f311410311411311412300901300906300907300108"
-
-CONFIRMED_KEYS = {
-    "pressure_bar": "3002.01",   # HiU16 / 1000
-    "motor_starts": "3007.03",    # LoU16
-    "load_cycles":  "3007.04",    # LoU16
+CONF_MAP = {
+    "3002.01": {"name": "Kompressorauslass",       "unit": "bar", "decode": lambda hi, lo: round(hi/1000.0, 3), "device_class": "pressure", "state_class": "measurement"},
+    "3002.03": {"name": "Elementauslass",         "unit": "°C",  "decode": lambda hi, lo: round(hi/10.0, 1),    "device_class": "temperature", "state_class": "measurement"},
+    "3002.05": {"name": "Umgebungsluft",          "unit": "°C",  "decode": lambda hi, lo: round(hi/10.0, 1),    "device_class": "temperature", "state_class": "measurement"},
+    "3002.08": {"name": "Controller Temperature", "unit": "°C",  "decode": lambda hi, lo: round(hi/10.0, 1),    "device_class": "temperature", "state_class": "measurement"},
+    "3007.03": {"name": "Motorstarts",            "unit": None,  "decode": lambda hi, lo: lo,                   "state_class": "total_increasing"},
+    "3007.04": {"name": "Lastspiele",             "unit": None,  "decode": lambda hi, lo: lo,                   "state_class": "total_increasing"},
+    "3007.0B": {"name": "Lüfterstarts",           "unit": None,  "decode": lambda hi, lo: lo,                   "state_class": "total_increasing"},
+    "3007.0C": {"name": "Erzeugte Druckluftmenge","unit": "m³",  "decode": lambda hi, lo: lo * 1000,            "device_class": "volume", "state_class": "total_increasing"},
 }
 
-stop_event = threading.Event()
+HEX_RE = re.compile(r'^[0-9A-Fa-f]+$')
 
-def slugify(name: str) -> str:
-    s = name.strip().lower()
-    s = re.sub(r"[^a-z0-9]+", "_", s)
-    s = re.sub(r"_+", "_", s).strip("_")
-    return s or "mk5s"
-
-def parse_csv_list(s: str):
-    if s is None:
+def split_csv(s: str) -> List[str]:
+    s = (s or "").strip()
+    if not s:
         return []
-    return [x.strip() for x in s.split(",")] if s.strip() else []
+    return [x.strip() for x in s.split(",")]
 
-def build_question_pairs(question_hex: str):
-    pairs = []
-    for i in range(0, len(question_hex), 6):
-        chunk = question_hex[i:i+6]
-        if len(chunk) != 6:
-            break
-        idx = chunk[:4].upper()
-        si  = chunk[4:6].upper()
-        pairs.append(f"{idx}.{si}")
-    return pairs
-
-def parse_answer(answer_hex: str, pairs):
-    out = {}
-    ia = 0
-    for key in pairs:
-        if ia >= len(answer_hex):
-            out[key] = None
-            continue
-        ch = answer_hex[ia]
-        if ch == 'X':
-            out[key] = None
-            ia += 1
+def normalize_lists(primary: List[str], *others: List[str]) -> Tuple[List[str], ...]:
+    n = len(primary) if primary else 0
+    out = [primary]
+    for lst in others:
+        if not lst:
+            out.append([""] * n)
+        elif len(lst) == 1 and n > 1:
+            out.append(lst * n)
+        elif len(lst) < n:
+            out.append((lst + [""] * n)[:n])
         else:
-            if ia + 8 <= len(answer_hex):
-                out[key] = answer_hex[ia:ia+8].upper()
-                ia += 8
-            else:
-                out[key] = None
-                ia = len(answer_hex)
+            out.append(lst[:n])
+    return tuple(out)
+
+def parse_question_keys(qhex: str) -> List[str]:
+    q = re.sub(r'\s+', '', qhex or '')
+    keys = []
+    for i in range(0, len(q), 6):
+        chunk = q[i:i+6]
+        if len(chunk) < 6: break
+        keys.append(f"{chunk[:4].upper()}.{chunk[4:6].upper()}")
+    return keys
+
+def parse_answer_words(ahex: str) -> List[int]:
+    txt = (ahex or "").strip()
+    # Some controllers may write extra text; keep only hex
+    hex_only = re.sub(r'[^0-9A-Fa-f]', '', txt)
+    words = []
+    for i in range(0, len(hex_only), 8):
+        w = hex_only[i:i+8]
+        if len(w) < 8: break
+        try:
+            words.append(int(w, 16))
+        except ValueError:
+            break
+    return words
+
+def hi_lo_u16_from_u32(u: int) -> Tuple[int,int]:
+    hi = (u >> 16) & 0xFFFF
+    lo = u & 0xFFFF
+    return hi, lo
+
+def ensure_mqtt_client(host: str, port: int, username: str, password: str) -> mqtt.Client:
+    client = mqtt.Client()
+    if username:
+        client.username_pw_set(username, password or "")
+    # Don't block startup if broker is not ready yet: loop_start and reconnect on publish
+    client.connect_async(host, port, 60)
+    client.loop_start()
+    return client
+
+def publish_discovery(client: mqtt.Client, discovery_prefix: str, base: str, name: str, keys: List[str]):
+    device = {
+        "identifiers": [f"mk5s_{name}"],
+        "manufacturer": "Atlas Copco",
+        "model": "MK5S Touch",
+        "name": name
+    }
+    for key in keys:
+        if key not in CONF_MAP: 
+            continue
+        c = CONF_MAP[key]
+        sensor_name = c["name"]
+        uniq = f"{name}_{key.replace('.','_')}"
+        state_topic = f"{base}/{key}/state"
+        cfg = {
+            "name": sensor_name,
+            "unique_id": uniq,
+            "state_topic": state_topic,
+            "device": device,
+            "force_update": False,
+        }
+        if "unit" in c and c["unit"]:
+            cfg["unit_of_measurement"] = c["unit"]
+        if "device_class" in c:
+            cfg["device_class"] = c["device_class"]
+        if "state_class" in c:
+            cfg["state_class"] = c["state_class"]
+        topic = f"{discovery_prefix}/sensor/{uniq}/config"
+        client.publish(topic, json.dumps(cfg), qos=1, retain=True)
+
+def decode_known(keys: List[str], words: List[int]) -> Dict[str, float]:
+    out = {}
+    for i, key in enumerate(keys):
+        if i >= len(words): break
+        if key in CONF_MAP:
+            hi, lo = hi_lo_u16_from_u32(words[i])
+            try:
+                out[key] = CONF_MAP[key]["decode"](hi, lo)
+            except Exception:
+                pass
     return out
 
-def u16_hi(raw8: str):
-    return int(raw8[0:4], 16)
+def try_post(host: str, qhex: str, timeout: int, verbose: bool) -> Tuple[str, Dict[str, List[str]]]:
+    url = f"http://{host}/cgi-bin/mkv.cgi"
+    headers = {"Connection": "close", "Content-Type": "text/plain"}
+    # Method A: raw body
+    try:
+        r = requests.post(url, data=qhex, timeout=timeout, headers=headers)
+        if verbose:
+            print(f"[{host}] POST A status={r.status_code}")
+        if r.ok and HEX_RE.match(re.sub(r'[^0-9A-Fa-f]', '', r.text) or ""):
+            return r.text, {"hdr": [f"{k}: {v}" for k,v in r.headers.items()]}
+    except Exception as e:
+        if verbose: print(f"[{host}] POST A error: {e}")
 
-def u16_lo(raw8: str):
-    return int(raw8[4:8], 16)
+    # Method B: form-encoded
+    try:
+        r = requests.post(url, data={"Q": qhex}, timeout=timeout)
+        if verbose:
+            print(f"[{host}] POST B status={r.status_code}")
+        if r.ok:
+            return r.text, {"hdr": [f"{k}: {v}" for k,v in r.headers.items()]}
+        return r.text, {"hdr": [f"{k}: {v}" for k,v in r.headers.items()]}
+    except Exception as e:
+        if verbose: print(f"[{host}] POST B error: {e}")
+        raise
 
-def post_question(ip: str, question_hex: str, timeout: int):
-    url = f"http://{ip}/cgi-bin/mkv.cgi"
-    r = requests.post(url, data={"QUESTION": question_hex}, timeout=timeout)
-    r.raise_for_status()
-    return r.text.strip(), r.headers
+def worker(cfg, mqttc):
+    host = cfg["host"]
+    name = cfg["name"]
+    question = cfg["question"] or DEFAULT_QUESTION
+    interval = int(cfg["interval"] or 10)
+    timeout  = int(cfg["timeout"] or 5)
+    verbose  = (str(cfg["verbose"]).lower() == "true")
+    base_topic = f"mk5s/{name}"
+    keys = parse_question_keys(question)
 
-def publish_discovery(cli: mqtt.Client, base_slug: str, name: str, disc_prefix: str):
-    device = {
-        "identifiers": [f"mk5s_{base_slug}"],
-        "name": name,
-        "manufacturer": "Atlas Copco",
-        "model": "MK5s Touch",
-    }
-    base_topic = f"{base_slug}"
-    avail_topic = f"{base_topic}/availability"
-    sensors = [
-        ("pressure_bar", "Pressure", "pressure_bar", "bar", "measurement", "pressure"),
-        ("motor_starts", "Motor Starts", "motor_starts", None, "total_increasing", None),
-        ("load_cycles",  "Load Cycles", "load_cycles", None, "total_increasing", None),
-    ]
-    for sensor_id, nice, state_key, unit, state_class, device_class in sensors:
-        conf_topic = f"{disc_prefix}/sensor/{base_slug}/{sensor_id}/config"
-        payload = {
-            "name": f"{name} {nice}",
-            "uniq_id": f"{base_slug}_{sensor_id}",
-            "stat_t": f"{base_topic}/{state_key}",
-            "avty_t": avail_topic,
-            "dev": device,
-            "qos": 0,
-            "ret": True,
-        }
-        if unit:
-            payload["unit_of_meas"] = unit
-        if state_class:
-            payload["stat_cla"] = state_class
-        if device_class:
-            payload["dev_cla"] = device_class
-        cli.publish(conf_topic, json.dumps(payload), retain=True)
+    # Publish discovery for known keys
+    publish_discovery(mqttc, cfg["discovery_prefix"], base_topic, name, keys)
 
-def worker(host_idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
-           mqtt_settings: dict, question_hex: str):
-    base_slug = slugify(name or ip)
-    question_hex = (question_hex or DEFAULT_QUESTION).strip()
-    pairs = build_question_pairs(question_hex)
-
-    cli = mqtt.Client(client_id=f"mk5s_{base_slug}", clean_session=True)
-    cli.username_pw_set(mqtt_settings["user"], mqtt_settings["password"])
-    avail_topic = f"{base_slug}/availability"
-    cli.will_set(avail_topic, payload="offline", retain=True)
-
-    cli.connect(mqtt_settings["host"], int(mqtt_settings["port"]), keepalive=60)
-    cli.loop_start()
-
-    publish_discovery(cli, base_slug, name or ip, mqtt_settings["discovery_prefix"])
-    cli.publish(avail_topic, "online", retain=True)
-
-    while not stop_event.is_set():
+    while True:
         try:
-            ans, hdrs = post_question(ip, question_hex, timeout)
+            txt, meta = try_post(host, question, timeout, verbose)
             if verbose:
-                print("Question:"); print(question_hex)
-                print("Answer:"); print(ans)
-            mapa = parse_answer(ans, pairs)
-            def get_raw(key):
-                kk = CONFIRMED_KEYS[key]
-                return mapa.get(kk)
-            raw_pressure = get_raw("pressure_bar")
-            raw_ms = get_raw("motor_starts")
-            raw_lc = get_raw("load_cycles")
+                print(f"[{host}] Question:\n{question}")
+                print(f"[{host}] Answer:\n{txt[:512]}")
+                for h in meta.get("hdr", []):
+                    print(f"[{host}] H {h}")
 
-            pressure_val = round(u16_hi(raw_pressure)/1000.0, 3) if raw_pressure else None
-            ms_val = u16_lo(raw_ms) if raw_ms else None
-            lc_val = u16_lo(raw_lc) if raw_lc else None
+            words = parse_answer_words(txt)
+            decoded = decode_known(keys, words)
 
-            if verbose:
-                print(f"[values] {name}: pressure={pressure_val if pressure_val is not None else '—'} bar, motor_starts={ms_val if ms_val is not None else '—'}, load_cycles={lc_val if lc_val is not None else '—'}")
+            # Publish individual sensor states
+            for key, value in decoded.items():
+                topic = f"{base_topic}/{key}/state"
+                mqttc.publish(topic, str(value), qos=0, retain=False)
 
-            if pressure_val is not None:
-                cli.publish(f"{base_slug}/pressure_bar", str(pressure_val), retain=True)
-            if ms_val is not None:
-                cli.publish(f"{base_slug}/motor_starts", str(ms_val), retain=True)
-            if lc_val is not None:
-                cli.publish(f"{base_slug}/load_cycles", str(lc_val), retain=True)
-
-            cli.publish(avail_topic, "online", retain=True)
         except Exception as e:
-            print(f"[mk5s] poll error for {ip}: {e}", file=sys.stderr)
-            try: cli.publish(avail_topic, "offline", retain=True)
-            except Exception: pass
-
-        for _ in range(int(interval*10)):
-            if stop_event.is_set(): break
-            time.sleep(0.1)
-
-    try: cli.publish(avail_topic, "offline", retain=True)
-    except Exception: pass
-    cli.loop_stop()
-    try: cli.disconnect()
-    except Exception: pass
+            print(f"[{host}] poll error: {e}")
+        time.sleep(interval)
 
 def main():
-    if not os.path.exists(OPTIONS_PATH):
-        print("[mk5s] options.json not found; using defaults for single host")
-        opts = {}
-    else:
-        with open(OPTIONS_PATH, "r", encoding="utf-8") as f:
-            opts = json.load(f)
+    # Load options
+    with open("/data/options.json", "r", encoding="utf-8") as f:
+        opt = json.load(f)
 
-    ip_list        = parse_csv_list(opts.get("ip_list", ""))
-    name_list      = parse_csv_list(opts.get("name_list", ""))
-    interval_list  = parse_csv_list(opts.get("interval_list", ""))
-    timeout_list   = parse_csv_list(opts.get("timeout_list", ""))
-    verbose_list   = parse_csv_list(opts.get("verbose_list", ""))
-    question_list  = parse_csv_list(opts.get("question_list", ""))
+    hosts     = split_csv(opt.get("hosts", ""))
+    names     = split_csv(opt.get("names", "")) or [h.replace(".", "_") for h in hosts]
+    intervals = split_csv(opt.get("intervals", "")) or ["10"]
+    timeouts  = split_csv(opt.get("timeouts", ""))  or ["5"]
+    verbose   = split_csv(opt.get("verbose", ""))   or ["false"]
+    questions = split_csv(opt.get("questions", "")) # optional
 
-    default_question = (opts.get("question") or DEFAULT_QUESTION).strip()
+    hosts, names, intervals, timeouts, verbose, questions = normalize_lists(
+        hosts, names, intervals, timeouts, verbose, questions
+    )
 
-    if not ip_list:
-        ip_list = ["10.60.23.11"]
-    n = len(ip_list)
+    mqtt_host = opt.get("mqtt_host", "localhost") or "localhost"
+    mqtt_port = int(opt.get("mqtt_port", 1883) or 1883)
+    mqtt_user = opt.get("mqtt_user", "") or ""
+    mqtt_pass = opt.get("mqtt_password", "") or ""
+    discovery_prefix = opt.get("discovery_prefix", "homeassistant") or "homeassistant"
 
-    def pick(lst, i, default):
-        if not lst: return default
-        return lst[i] if i < len(lst) and lst[i] != "" else (lst[-1] if lst[-1] != "" else default)
-
-    mqtt_settings = {
-        "host": opts.get("mqtt_host", "localhost"),
-        "port": opts.get("mqtt_port", 1883),
-        "user": opts.get("mqtt_user", "mqtt_user"),
-        "password": opts.get("mqtt_password", "mqtt_password"),
-        "discovery_prefix": opts.get("discovery_prefix", "homeassistant"),
-    }
+    mqttc = ensure_mqtt_client(mqtt_host, mqtt_port, mqtt_user, mqtt_pass)
 
     threads = []
-    for i in range(n):
-        ip = ip_list[i]
-        name = pick(name_list, i, ip)
-        try: interval = int(pick(interval_list, i, "10"))
-        except: interval = 10
-        try: timeout = int(pick(timeout_list, i, "5"))
-        except: timeout = 5
-        verbose = pick(verbose_list, i, "false").lower() in ("1","true","yes","on")
-        qh = pick(question_list, i, default_question) or default_question
+    for i, host in enumerate(hosts):
+        if not host:
+            continue
+        cfg = dict(
+            host=host, name=(names[i] or host.replace(".", "_")), 
+            interval=intervals[i], timeout=timeouts[i], verbose=verbose[i],
+            question=(questions[i] if i < len(questions) else ""),
+            discovery_prefix=discovery_prefix
+        )
+        t = threading.Thread(target=worker, args=(cfg, mqttc), daemon=True)
+        t.start()
+        threads.append(t)
+        print(f"[mk5s] worker started: host={cfg['host']} name={cfg['name']} interval={cfg['interval']}s")
 
-        print(f"[mk5s] starting: host={ip} name={name} interval={interval}s timeout={timeout} verbose={verbose}")
-        t = threading.Thread(target=worker, args=(i, ip, name, interval, timeout, verbose, mqtt_settings, qh), daemon=True)
-        threads.append(t); t.start()
-
-    def handle_sigterm(signum, frame): stop_event.set()
-    signal.signal(signal.SIGTERM, handle_sigterm)
-    signal.signal(signal.SIGINT, handle_sigterm)
-
-    try:
-        while not stop_event.is_set(): time.sleep(0.5)
-    finally:
-        stop_event.set()
-        for t in threads: t.join(timeout=5.0)
+    # Keep the main thread alive
+    while True:
+        time.sleep(3600)
 
 if __name__ == "__main__":
     main()

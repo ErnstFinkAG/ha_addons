@@ -1,4 +1,5 @@
-#!/usr/bin/with-contenv sh
-set -e
-echo "[mk5s] starting container"
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "[mk5s] starting add-on"
 exec python3 /app/mk5s_client.py
