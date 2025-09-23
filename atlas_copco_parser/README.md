@@ -88,7 +88,7 @@ Example:
 
 - **Node ID (topic):** device slug, e.g. `eftool_bw_b2_air1`  
 - **Object ID:** just the sensor key, e.g. `vsd_80_100`  
-- **Unique ID:** `mk5s:<device_slug>:<key>`  
+- **Unique ID:** `atlas:<device_slug>:<key>`  
 - **State topic:** `<device_slug>/<key>`
 
 `homeassistant/<platform>/<device_slug>/<device_slug>_<key>/config` (emptied, retained),

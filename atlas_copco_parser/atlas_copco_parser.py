@@ -253,7 +253,7 @@ def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix
     Also: publish empty retained configs to potential legacy topics that used base_slug twice.
     """
     device = {
-        "ids": [f"mk5s_{base_slug}"],
+        "ids": [f"atlas_{base_slug}"],
         "mf": "Atlas Copco",
         "mdl": "MK5s Touch",
         "name": name,
@@ -311,16 +311,16 @@ def single_pair_read(session: requests.Session, ip: str, pair: str, timeout: int
     toks = tokenize_answer(clean, 1)
     tok = toks[0] if toks else None
     if verbose:
-        print(f"[mk5s:{ip}] FALLBACK_Q={q}", flush=True)
-        print(f"[mk5s:{ip}] FALLBACK_A_RAW={repr(raw)}", flush=True)
-        print(f"[mk5s:{ip}] FALLBACK_A_CLEAN={repr(clean)} TOKENS={len(toks)}", flush=True)
-        print(f"[mk5s:{ip}]   token[fallback] {pair} = {tok if tok else 'None'}", flush=True)
+        print(f"[atlas:{ip}] FALLBACK_Q={q}", flush=True)
+        print(f"[atlas:{ip}] FALLBACK_A_RAW={repr(raw)}", flush=True)
+        print(f"[atlas:{ip}] FALLBACK_A_CLEAN={repr(clean)} TOKENS={len(toks)}", flush=True)
+        print(f"[atlas:{ip}]   token[fallback] {pair} = {tok if tok else 'None'}", flush=True)
     return tok
 
 def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
            mqtt_settings: dict, scaling_overrides: Dict[str, float], question_hex: str, sensors_def: Dict[str, Dict[str, Any]]):
     base_slug = slugify(name or ip)
-    cli = mqtt.Client(client_id=f"mk5s_{base_slug}", clean_session=True)
+    cli = mqtt.Client(client_id=f"atlas_{base_slug}", clean_session=True)
     if mqtt_settings.get("user") or mqtt_settings.get("password"):
         cli.username_pw_set(mqtt_settings.get("user",""), mqtt_settings.get("password",""))
     avail_topic = f"{base_slug}/availability"
@@ -336,7 +336,7 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
     keys = build_keys_from_question(qhex)
 
     while not stop_event.is_set():
-        print(f"[mk5s:{ip}] ==== decode cycle @ {time.strftime('%Y-%m-%d %H:%M:%S')} ====", flush=True)
+        print(f"[atlas:{ip}] ==== decode cycle @ {time.strftime('%Y-%m-%d %H:%M:%S')} ====", flush=True)
         # Single-shot request
         try:
             resp = session.post(f"http://{ip}/cgi-bin/mkv.cgi", data={"QUESTION": qhex}, timeout=timeout)
@@ -346,14 +346,14 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
         clean = clean_answer(raw)
         tokens = tokenize_answer(clean, len(keys))
         if verbose:
-            print(f"[mk5s:{ip}] Q_SINGLE(len={len(qhex)})={qhex}", flush=True)
-            print(f"[mk5s:{ip}] A_SINGLE_RAW={repr(raw)}", flush=True)
-            print(f"[mk5s:{ip}] A_SINGLE_CLEAN(len={len(clean)}) TOKENS={len(tokens)}", flush=True)
+            print(f"[atlas:{ip}] Q_SINGLE(len={len(qhex)})={qhex}", flush=True)
+            print(f"[atlas:{ip}] A_SINGLE_RAW={repr(raw)}", flush=True)
+            print(f"[atlas:{ip}] A_SINGLE_CLEAN(len={len(clean)}) TOKENS={len(tokens)}", flush=True)
 
         pair_raw: Dict[str, Optional[str]] = {}
         for k, tok in zip(keys, tokens):
             if verbose:
-                print(f"[mk5s:{ip}]   token[single] {k} = {tok if tok else 'None'}", flush=True)
+                print(f"[atlas:{ip}]   token[single] {k} = {tok if tok else 'None'}", flush=True)
             pair_raw[k] = tok
 
         # Targeted fallbacks for fields that matter to HA
@@ -391,7 +391,7 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
             raw_disp = raw8 if raw8 is not None else "X/None"
             int_disp = "—" if partv is None else str(partv)
             calc_disp = "unknown" if calc is None else f"{calc}{meta.get('unit') or ''}"
-            print(f"[mk5s:{ip}] {key:<24} pair={pair:<7} part={meta['part']:<3} raw={raw_disp:<10} int={int_disp:<12} calc={calc_disp}", flush=True)
+            print(f"[atlas:{ip}] {key:<24} pair={pair:<7} part={meta['part']:<3} raw={raw_disp:<10} int={int_disp:<12} calc={calc_disp}", flush=True)
 
         # Sleep
         for _ in range(int(interval * 10)):
@@ -405,7 +405,7 @@ def log_banner():
         sha = file_sha256(SELF_PATH)[:16]
     except Exception:
         pass
-    print(f"[mk5s] mk5s_client.py VERSION={VERSION} SHA256[:16]={sha}", flush=True)
+    print(f"[atlas] mk5s_client.py VERSION={VERSION} SHA256[:16]={sha}", flush=True)
 
 def main():
     try:
@@ -463,7 +463,7 @@ def main():
             timeout = 5
         verbose = pick(verbose_list, i, "false").lower() in ("1","true","yes","on")
 
-        print(f"[mk5s] starting: host={ip} name={name} interval={interval}s timeout={timeout} verbose={verbose}", flush=True)
+        print(f"[atlas] starting: host={ip} name={name} interval={interval}s timeout={timeout} verbose={verbose}", flush=True)
         t = threading.Thread(target=worker,
                              args=(i, ip, name, interval, timeout, verbose, mqtt_settings, scaling_overrides),
                              daemon=True)

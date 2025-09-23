@@ -1,7 +1,7 @@
-name: MK5S Client
+name: Atlas Copco Parser
 version: "0.9.4"
-slug: mk5s_client
-description: "Poll Atlas Copco MK5s Touch controllers and publish MQTT sensors (pressure, motor starts, load cycles). Supports multiple hosts via CSV config."
+slug: atlas_copco_parser
+description: "Atlas Copco MK5s Touch parser/exporter for Home Assistant (MQTT) and publish MQTT sensors (pressure, motor starts, load cycles). Supports multiple hosts via CSV config."
 arch:
   - amd64
   - aarch64
