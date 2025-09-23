@@ -18,6 +18,66 @@ OPTIONS_PATH = "/data/options.json"
 SELF_PATH = __file__
 VERSION = "0.8.1-entityid-fix-2025-09-04"
 
+# ---------------- Configurable translation layer ----------------
+def load_translation_from_opts(opts: Dict[str, Any]) -> None:
+    """Allow overriding QUESTION_HEX and SENSORS via add-on options.
+    Supported options:
+      - translation_mode: 'built_in' (default), 'file', or 'inline'
+      - translation_file: absolute path to JSON file (when mode=='file')
+      - translation_inline: JSON string (when mode=='inline')
+      - question: optional hex string override (legacy)
+    JSON structure (file/inline):
+    {
+      "question_hex": "300201...",
+      "sensors": {
+        "pressure_bar": {"pair":"3002.01","part":"hi","decode":"_div1000","unit":"bar","device_class":"pressure","state_class":"measurement","name":"Pressure"}
+      }
+    }
+    """
+    global QUESTION_HEX, SENSORS
+    mode = (opts.get("translation_mode") or "built_in").strip().lower()
+    q_override = opts.get("question")
+    data = None
+    if mode == "file":
+        path = opts.get("translation_file")
+        if path and os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                print(f"[atlas] translation_file load error: {e}", flush=True)
+        else:
+            print(f"[atlas] translation_file not found: {path}", flush=True)
+    elif mode == "inline":
+        j = opts.get("translation_inline")
+        if j:
+            try:
+                data = json.loads(j)
+            except Exception as e:
+                print(f"[atlas] translation_inline parse error: {e}", flush=True)
+    # Legacy question override
+    if isinstance(q_override, str) and q_override.strip():
+        QUESTION_HEX = re.sub(r"\s+", "", q_override.strip())
+    # Apply JSON if present
+    if isinstance(data, dict):
+        if isinstance(data.get("question_hex"), str) and data.get("question_hex").strip():
+            QUESTION_HEX = re.sub(r"\s+", "", data["question_hex"].strip())
+        if isinstance(data.get("sensors"), dict) and data.get("sensors"):
+            # Basic validation: ensure each sensor has a 'pair' and 'part'
+            valid = {}
+            for k, v in data["sensors"].items():
+                if isinstance(v, dict) and v.get("pair") and v.get("part"):
+                    # carry through other fields as-is
+                    valid[k] = v
+            if valid:
+                SENSORS.update(valid)  # allow partial override / additions
+                # Also drop sensors explicitly set to null
+                for k, v in data["sensors"].items():
+                    if v is None and k in SENSORS:
+                        del SENSORS[k]
+    print(f"[atlas] translation mode: {mode}; question_len={len(QUESTION_HEX)}; sensors={len(SENSORS)}", flush=True)
+
+
 # ------------------------- PowerShell QUESTION (exact) ------------------------
 QUESTION_HEX = (
     "300201300203300205300208"
@@ -32,6 +92,61 @@ QUESTION_HEX = (
     "300108"
 )
 
+
+# -------------------- Per-device config & merge --------------------
+def merge_sensors(base: dict, overrides: Optional[dict]) -> dict:
+    """
+    Merge base SENSORS with per-device overrides.
+    Override keys: name, unit, device_class, state_class, part, decode, pair, kind, enabled (bool)
+    Setting {"enabled": false} removes that sensor.
+    Adding a new key adds a sensor (must specify pair/part/decode minimally).
+    """
+    if overrides is None:
+        return dict(base)
+    out = {}
+    for k, meta in base.items():
+        om = overrides.get(k) if isinstance(overrides, dict) else None
+        if isinstance(om, dict) and om.get("enabled") is False:
+            continue
+        nm = dict(meta)
+        if isinstance(om, dict):
+            for fld in ("name","unit","device_class","state_class","part","decode","pair","kind"):
+                if fld in om and om[fld] is not None:
+                    nm[fld] = om[fld]
+        out[k] = nm
+    # additions
+    for k, om in overrides.items():
+        if k not in out and isinstance(om, dict):
+            if om.get("enabled") is False:
+                continue
+            if not (om.get("pair") and om.get("part") and om.get("decode")):
+                continue
+            out[k] = dict(om)
+    return out
+
+def build_device_sensors(opts: dict, device: dict) -> Tuple[str, dict]:
+    """
+    Returns (question_hex, sensors_def) for a device by layering:
+    1) Built-in QUESTION_HEX and SENSORS
+    2) Global translation from opts (already applied to globals via load_translation_from_opts)
+    3) Device-level 'question_hex' and 'translation' overrides
+    4) Device-level 'sensors' overrides (enable/rename/tweak)
+    """
+    q = QUESTION_HEX
+    sensors = dict(SENSORS)
+    # device translation block like global JSON format
+    dtr = device.get("translation")
+    if isinstance(dtr, dict):
+        if isinstance(dtr.get("question_hex"), str) and dtr["question_hex"].strip():
+            q = re.sub(r"\s+","", dtr["question_hex"].strip())
+        if isinstance(dtr.get("sensors"), dict):
+            sensors = merge_sensors(sensors, dtr["sensors"])
+    # direct device fields
+    if isinstance(device.get("question_hex"), str) and device["question_hex"].strip():
+        q = re.sub(r"\s+","", device["question_hex"].strip())
+    if isinstance(device.get("sensors"), dict):
+        sensors = merge_sensors(sensors, device["sensors"])
+    return q, sensors
 # ------------------------- Helpers ------------------------
 def file_sha256(path: str) -> str:
     h = hashlib.sha256()
@@ -165,7 +280,7 @@ def csv_list(s: str) -> List[str]:
     return [x.strip() for x in s.split(",")] if s and s.strip() else []
 
 
-def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix: str):
+def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix: str, sensors_def: dict):
     """
     Publish MQTT Discovery with clean entity ids:
     - node_id (topic segment) = base_slug
@@ -178,9 +293,10 @@ def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix
         "mf": "Atlas Copco",
         "mdl": "MK5s Touch",
         "name": name,
+        "cns": [["ip".get("ip","")], ["host".get("hostname","")]],
     }
     avail_topic = f"{base_slug}/availability"
-    for key, meta in SENSORS.items():
+    for key, meta in sensors_def.items():
         is_binary = (meta.get("kind", "sensor") == "binary_sensor")
         platform = "binary_sensor" if is_binary else "sensor"
         # New, clean topic: .../<platform>/<node_id>/<object_id>/config  with object_id = key only
@@ -239,7 +355,7 @@ def single_pair_read(session: requests.Session, ip: str, pair: str, timeout: int
     return tok
 
 def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
-           mqtt_settings: dict, scaling_overrides: Dict[str, float]):
+           mqtt_settings: dict, scaling_overrides: Dict[str, float], sensors_def: dict):
     base_slug = slugify(name or ip)
     cli = mqtt.Client(client_id=f"mk5s_{base_slug}", clean_session=True)
     if mqtt_settings.get("user") or mqtt_settings.get("password"):
@@ -248,7 +364,7 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
     cli.will_set(avail_topic, payload="offline", retain=True)
     cli.connect(mqtt_settings["host"], int(mqtt_settings["port"]), keepalive=60)
 
-    mqtt_discovery(cli, base_slug, name, mqtt_settings["discovery_prefix"])
+    mqtt_discovery(cli, base_slug, name, mqtt_settings["discovery_prefix"], sensors_def)
     cli.publish(avail_topic, "online", retain=True)
 
     session = requests.Session()
@@ -284,7 +400,7 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
                     pair_raw[pair] = tok
 
         # Decode & publish
-        for key, meta in SENSORS.items():
+        for key, meta in sensors_def.items():
             pair = meta["pair"].upper()
             raw8 = pair_raw.get(pair)
             if raw8 is None:
@@ -327,74 +443,85 @@ def log_banner():
         pass
     print(f"[mk5s] mk5s_client.py VERSION={VERSION} SHA256[:16]={sha}", flush=True)
 
+
 def main():
+    # Read options
+    with open("/data/options.json","r") as f:
+        opts = json.load(f)
+
+    # Global verbosity & scaling overrides
+    verbose_list = (opts.get("verbose_list") or "false").split(",")
+    scaling_overrides = {}  # reserved for future global scaling per key
+
+    # Load global translation customization first
     try:
-        with open(OPTIONS_PATH, "r") as f:
-            opts = json.load(f)
-    except Exception:
-        opts = {}
+        load_translation_from_opts(opts)
+    except Exception as e:
+        print(f"[atlas] translation load warning: {e}", flush=True)
 
-    ip_list = csv_list(opts.get("ip_list", ""))
-    name_list = csv_list(opts.get("name_list", ""))
-    interval_list = csv_list(opts.get("interval_list", ""))
-    timeout_list = csv_list(opts.get("timeout_list", ""))
-    verbose_list = csv_list(opts.get("verbose_list", ""))
-
-    try:
-        scaling_overrides = json.loads(opts.get("scaling_overrides", "{}"))
-    except Exception:
-        scaling_overrides = {}
-
-    if not ip_list:
-        ip_list = ["10.60.23.11"]
-
-    def pick(lst: List[str], i: int, default: str) -> str:
-        if not lst:
-            return default
-        return lst[i] if i < len(lst) and lst[i] != "" else (lst[-1] if lst[-1] != "" else default)
-
+    # MQTT global settings (can be overridden per-device)
     mqtt_settings = {
-        "host": opts.get("mqtt_host", "localhost"),
-        "port": opts.get("mqtt_port", 1883),
-        "user": opts.get("mqtt_user", ""),
-        "password": opts.get("mqtt_password", ""),
-        "discovery_prefix": opts.get("discovery_prefix", "homeassistant"),
+        "host": opts.get("mqtt_host","localhost"),
+        "port": opts.get("mqtt_port",1883),
+        "user": opts.get("mqtt_user",""),
+        "password": opts.get("mqtt_password",""),
+        "discovery_prefix": opts.get("discovery_prefix","homeassistant").rstrip("/")
     }
 
-    log_banner()
-
-    threads: List[threading.Thread] = []
-    for i, ip in enumerate(ip_list):
-        name = pick(name_list, i, ip)
+    workers = []
+    devices_json = opts.get("devices_json")
+    if isinstance(devices_json, str) and devices_json.strip().startswith("["):
         try:
-            interval = int(pick(interval_list, i, "10"))
-        except Exception:
-            interval = 10
-        try:
-            timeout = int(pick(timeout_list, i, "5"))
-        except Exception:
-            timeout = 5
-        verbose = pick(verbose_list, i, "false").lower() in ("1","true","yes","on")
+            devices = json.loads(devices_json)
+        except Exception as e:
+            print(f"[atlas] devices_json parse error: {e}", flush=True)
+            devices = []
+    else:
+        # Legacy comma-separated lists
+        ip_list = [x.strip() for x in (opts.get("ip_list") or "").split(",") if x.strip()]
+        name_list = [x.strip() for x in (opts.get("name_list") or "").split(",") if x.strip()]
+        interval_list = [x.strip() for x in (opts.get("interval_list") or "").split(",") if x.strip()]
+        timeout_list = [x.strip() for x in (opts.get("timeout_list") or "").split(",") if x.strip()]
+        devices = []
+        for i, ip in enumerate(ip_list):
+            devices.append({
+                "ip": ip,
+                "name": name_list[i] if i < len(name_list) else ip,
+                "interval": int(interval_list[i]) if i < len(interval_list) else 10,
+                "timeout": int(timeout_list[i]) if i < len(timeout_list) else 5,
+            })
 
-        print(f"[mk5s] starting: host={ip} name={name} interval={interval}s timeout={timeout} verbose={verbose}", flush=True)
-        t = threading.Thread(target=worker,
-                             args=(i, ip, name, interval, timeout, verbose, mqtt_settings, scaling_overrides),
-                             daemon=True)
-        threads.append(t)
+    # Launch a worker per device
+    for idx, dev in enumerate(devices):
+        ip = dev.get("ip")
+        name = dev.get("name") or ip
+        interval = int(dev.get("interval", 10))
+        timeout = int(dev.get("timeout", 5))
+        verbose = str(dev.get("verbose", verbose_list[0] if verbose_list else "false")).lower() in ("1","true","yes","on")
+        # MQTT overrides
+        dev_mqtt = dict(mqtt_settings)
+        if isinstance(dev.get("mqtt"), dict):
+            dev_mqtt.update({k: v for k,v in dev["mqtt"].items() if v not in (None,"")})
+            if "discovery_prefix" in dev_mqtt:
+                dev_mqtt["discovery_prefix"] = str(dev_mqtt["discovery_prefix"]).rstrip("/")
+        # Build per-device sensors and question
+        q, sensors_def = build_device_sensors(opts, dev)
+        # Provide device info for discovery
+        device_info = {"ip": ip}
+        # Patch QUESTION_HEX in a thread-local manner by capturing q into closure
+        def start_worker(i=idx, a_ip=ip, a_name=name, a_interval=interval, a_timeout=timeout, a_verbose=verbose, a_mqtt=dev_mqtt, a_sensors=sensors_def, a_q=q):
+            global QUESTION_HEX
+            saved_q = QUESTION_HEX
+            QUESTION_HEX = a_q
+            try:
+                worker(i, a_ip, a_name, a_interval, a_timeout, a_verbose, a_mqtt, scaling_overrides, a_sensors, {"ip": a_ip})
+            finally:
+                QUESTION_HEX = saved_q
+        t = threading.Thread(target=start_worker, daemon=True)
+        workers.append(t)
         t.start()
 
-    def handle_sigterm(signum, frame):
-        stop_event.set()
-    signal.signal(signal.SIGTERM, handle_sigterm)
-    signal.signal(signal.SIGINT, handle_sigterm)
+    # Wait forever; handle SIGTERM elsewhere
+    while True:
+        time.sleep(60)
 
-    try:
-        while not stop_event.is_set():
-            time.sleep(0.5)
-    finally:
-        stop_event.set()
-        for t in threads:
-            t.join(timeout=5.0)
-
-if __name__ == "__main__":
-    main()

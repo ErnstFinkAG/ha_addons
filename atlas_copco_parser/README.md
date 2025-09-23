@@ -96,3 +96,73 @@ then publishes the correct one:
 `homeassistant/<platform>/<device_slug>/<key>/config`.
 
 ---
+
+
+## Translation layer (configurable)
+
+Different Atlas Copco controllers expose different question/answer maps. You can override both the **question hex string** and the **sensor translation map** without changing the code.
+
+### Option A — external JSON file
+Set in add-on options:
+- `translation_mode: "file"`
+- `translation_file: "/config/atlas_translation.json"`
+
+**atlas_translation.json** format:
+```json
+{
+  "question_hex": "300201300203...",
+  "sensors": {
+    "pressure_bar": {"pair":"3002.01","part":"hi","decode":"_div1000","unit":"bar","device_class":"pressure","state_class":"measurement","name":"Pressure"},
+    "service_a": {"pair":"3009.06","part":"u32","decode":"_service_remaining_3000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service A Remaining"}
+  }
+}
+```
+
+### Option B — inline JSON
+Set in add-on options:
+- `translation_mode: "inline"`
+- `translation_inline: "<paste the same JSON as above>"`
+
+### Option C — legacy question override
+If you only need to override the single-question string, set:
+- `question: "<hex without spaces>"`
+
+> The add-on merges your `sensors` map with the built-in one: keys you provide are overridden/added; set a key to `null` to remove a built-in sensor.
+
+
+
+## Per-device configurable sensors (devices_json)
+
+You can now configure **each device and each sensor** independently via `devices_json` in the add-on options.
+Set it to a JSON array of device objects. Example:
+
+```json
+[
+  {
+    "ip": "10.60.23.11",
+    "name": "compressor_a",
+    "interval": 10,
+    "timeout": 5,
+    "mqtt": {
+      "discovery_prefix": "homeassistant",
+      "host": "mqtt.local",
+      "port": 1883
+    },
+    "question_hex": "300201300203...",
+    "translation": {
+      "sensors": {
+        "service_a": {"name": "Service A Remaining"},
+        "vsd_1_20": {"enabled": false}
+      }
+    },
+    "sensors": {
+      "pressure_bar": {"name": "Line Pressure", "unit": "bar"},
+      "service_b": {"enabled": true, "name": "Service B Remaining"}
+    }
+  }
+]
+```
+
+- In `sensors` or `translation.sensors`, set `"enabled": false` to hide a sensor from discovery and publishing.
+- You can **add entirely new keys** by providing `pair`, `part`, and `decode`.
+- Per-device `mqtt` settings override global ones if provided.

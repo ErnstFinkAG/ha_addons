@@ -34,3 +34,15 @@ Name	Key	Encoding with comment
 "service_a": "3009.06", # 3000 − (UInt32/3600)
 "service_b": "3009.07", # 6000 − (UInt32/3600)
 "machine_status": "3001.08", # UInt32 5 is standby and 28 is load (push value without change)
+
+---
+
+JSON example for custom controllers (save as /config/atlas_translation.json):
+
+{
+  "question_hex": "300201300203300205300208",
+  "sensors": {
+    "pressure_bar": {"pair":"3002.01","part":"hi","decode":"_div1000","unit":"bar","device_class":"pressure","state_class":"measurement","name":"Pressure"},
+    "service_a": {"pair":"3009.06","part":"u32","decode":"_service_remaining_3000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service A Remaining"}
+  }
+}
