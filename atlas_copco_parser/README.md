@@ -128,3 +128,25 @@ name_list: "compressor_a,compressor_b"
 type_list: "GA15VS23A,GA15VP_13"
 ```
 If a type is unknown, the add-on falls back to `DEFAULT`.
+
+
+#### Template keys (no `type_` prefix)
+Use these keys for each known type:
+- `<TYPE>_question`
+- `<TYPE>_<sensor>_key`
+- `<TYPE>_<sensor>_encoding`
+- `<TYPE>_<sensor>_calc`
+
+Example:
+```yaml
+type_list: "GA15VS23A,GA15VP_13"
+
+GA15VS23A_question: "300201300203300205..."
+GA15VS23A_pressure_bar_key: "3002.01"
+GA15VS23A_pressure_bar_encoding: "HiU16"
+GA15VS23A_pressure_bar_calc: "/1000"
+
+GA15VP_13_question: "300201300205300208..."
+GA15VP_13_service_a_encoding: "u32"
+GA15VP_13_service_a_calc: "3000-"
+```
