@@ -300,7 +300,7 @@ def single_pair_read(session: requests.Session, ip: str, pair: str, timeout: int
     return tok
 
 def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
-           mqtt_settings: dict, scaling_overrides: Dict[str, float]):
+           mqtt_settings: dict, scaling_overrides: Dict[str, float], question_hex: str):
     base_slug = slugify(name or ip)
     cli = mqtt.Client(client_id=f"mk5s_{base_slug}", clean_session=True)
     if mqtt_settings.get("user") or mqtt_settings.get("password"):
@@ -314,20 +314,21 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
 
     session = requests.Session()
 
-    keys = build_keys_from_question(QUESTION_HEX)
+    qhex = re.sub(r"\s+", "", (question_hex or QUESTION_HEX))
+    keys = build_keys_from_question(qhex)
 
     while not stop_event.is_set():
         print(f"[mk5s:{ip}] ==== decode cycle @ {time.strftime('%Y-%m-%d %H:%M:%S')} ====", flush=True)
         # Single-shot request
         try:
-            resp = session.post(f"http://{ip}/cgi-bin/mkv.cgi", data={"QUESTION": QUESTION_HEX}, timeout=timeout)
+            resp = session.post(f"http://{ip}/cgi-bin/mkv.cgi", data={"QUESTION": qhex}, timeout=timeout)
             raw = resp.text if resp.status_code == 200 else ""
         except Exception as e:
             raw = f"EXC:{e}"
         clean = clean_answer(raw)
         tokens = tokenize_answer(clean, len(keys))
         if verbose:
-            print(f"[mk5s:{ip}] Q_SINGLE(len={len(QUESTION_HEX)})={QUESTION_HEX}", flush=True)
+            print(f"[mk5s:{ip}] Q_SINGLE(len={len(qhex)})={qhex}", flush=True)
             print(f"[mk5s:{ip}] A_SINGLE_RAW={repr(raw)}", flush=True)
             print(f"[mk5s:{ip}] A_SINGLE_CLEAN(len={len(clean)}) TOKENS={len(tokens)}", flush=True)
 
@@ -401,6 +402,7 @@ def main():
     ip_list = csv_list(opts.get("ip_list", ""))
     name_list = csv_list(opts.get("name_list", ""))
     interval_list = csv_list(opts.get("interval_list", ""))
+    question_list = csv_list(opts.get("question_list", ""))
     timeout_list = csv_list(opts.get("timeout_list", ""))
     verbose_list = csv_list(opts.get("verbose_list", ""))
 
@@ -430,6 +432,7 @@ def main():
     threads: List[threading.Thread] = []
     for i, ip in enumerate(ip_list):
         name = pick(name_list, i, ip)
+        qhex = question_list[i]
         try:
             interval = int(pick(interval_list, i, "10"))
         except Exception:

@@ -108,3 +108,16 @@ Each sensor can be overridden via four fields:
 - `<key>_calc` — calculation hint or decoder id (e.g. `/1000`, `/10`, `/3600`, `*1000`, `bucket`, `3000-`, `6000-` or `_div1000`, `_div10`, `_hours_from_seconds_u32`, `_times1000`, `_percent_from_bucket`, `_service_remaining_3000`, `_service_remaining_6000`).
 
 Only the values you set are applied; others stay at their defaults.
+
+
+## Per-device question strings (required)
+
+You can supply a question per device using a CSV that lines up with `ip_list`/`name_list`:
+
+```yaml
+ip_list: "10.60.23.11,10.60.23.12"
+name_list: "compressor_a,compressor_b"
+question_list: "300201300203...,300201300205..."
+```
+
+- `question_list[i]` must be provided for every device; there is no global fallback.
