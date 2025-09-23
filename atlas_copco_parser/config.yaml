@@ -1,5 +1,5 @@
 name: Atlas Copco Parser
-version: "0.9.8"
+version: "0.9.8.1"
 slug: atlas_copco_parser
 description: "Atlas Copco MK5s Touch parser/exporter for Home Assistant (MQTT) and publish MQTT sensors (pressure, motor starts, load cycles). Supports multiple hosts via CSV config."
 arch:
@@ -270,8 +270,8 @@ schema:
   mqtt_user: str
   mqtt_password: str
   discovery_prefix: str
-  GA15VS23A_question: str?
-  GA15VP_13_question: str?
+  GA15VS23A_question: str
+  GA15VP_13_question: str
   GA15VS23A_pressure_bar_key: str?
   GA15VS23A_pressure_bar_encoding: str?
   GA15VS23A_pressure_bar_calc: str?
