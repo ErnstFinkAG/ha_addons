@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# MK5s Client — Home Assistant add-on
+# Atlas Copco Parser — Home Assistant add-on
 # VERSION: 0.8.1-entityid-fix-2025-09-04
 #
 # This version mirrors the PowerShell script:
@@ -16,7 +16,7 @@ import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
 SELF_PATH = __file__
-VERSION = "0.8.1-entityid-fix-2025-09-04"
+VERSION = "0.9.0"
 
 # ------------------------- PowerShell QUESTION (exact) ------------------------
 QUESTION_HEX = (
