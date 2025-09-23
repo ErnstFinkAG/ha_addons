@@ -1,4 +1,4 @@
-# atlas_copco_parser — Home Assistant Add‑on
+# Atlas Copco MK5s Touch — Home Assistant Add‑on
 
 ---
 
@@ -41,8 +41,8 @@ Legend:
 | `current`                | 3021.05  | LoU16  | **LoU16** → **A**                             |  |
 | `flow`                   | 3021.0A  | HiU16  | **HiU16** → **%**                             |  |
 | `fan_motor` *(binary)*   | 3005.01  | HiU16  | **1 = ON**, **0 = OFF**                       | Published as `binary_sensor` |
-| `service_a`     | 3009.06  | UInt32 | **A Service: 3000 − (UInt32/3600)** → **h**              | Remaining hours |
-| `service_b`     | 3009.07  | UInt32 | **B Service: 6000 − (UInt32/3600)** → **h**              | Remaining hours |
+| `service_3000_hours`     | 3009.06  | UInt32 | **3000 − (UInt32/3600)** → **h**              | Remaining hours |
+| `service_6000_hours`     | 3009.07  | UInt32 | **6000 − (UInt32/3600)** → **h**              | Remaining hours |
 | `machine_status`         | 3001.08  | UInt32 | **UInt32**                                    | `5 = standby`, `28 = load` |
 
 ---
@@ -98,71 +98,13 @@ then publishes the correct one:
 ---
 
 
-## Translation layer (configurable)
+## Configuration (per-item translation fields)
 
-Different Atlas Copco controllers expose different question/answer maps. You can override both the **question hex string** and the **sensor translation map** without changing the code.
+Each sensor can be overridden via four fields:
 
-### Option A — external JSON file
-Set in add-on options:
-- `translation_mode: "file"`
-- `translation_file: "/config/atlas_translation.json"`
+- `<key>_name` — friendly name used in HA
+- `<key>_key` — register pair e.g. `3002.01`
+- `<key>_encoding` — `hi`, `lo`, or `u32` (also accepts `HiU16`, `LoU16`, `UInt32`)
+- `<key>_calc` — calculation hint or decoder id (e.g. `/1000`, `/10`, `/3600`, `*1000`, `bucket`, `3000-`, `6000-` or `_div1000`, `_div10`, `_hours_from_seconds_u32`, `_times1000`, `_percent_from_bucket`, `_service_remaining_3000`, `_service_remaining_6000`).
 
-**atlas_translation.json** format:
-```json
-{
-  "question_hex": "300201300203...",
-  "sensors": {
-    "pressure_bar": {"pair":"3002.01","part":"hi","decode":"_div1000","unit":"bar","device_class":"pressure","state_class":"measurement","name":"Pressure"},
-    "service_a": {"pair":"3009.06","part":"u32","decode":"_service_remaining_3000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service A Remaining"}
-  }
-}
-```
-
-### Option B — inline JSON
-Set in add-on options:
-- `translation_mode: "inline"`
-- `translation_inline: "<paste the same JSON as above>"`
-
-### Option C — legacy question override
-If you only need to override the single-question string, set:
-- `question: "<hex without spaces>"`
-
-> The add-on merges your `sensors` map with the built-in one: keys you provide are overridden/added; set a key to `null` to remove a built-in sensor.
-
-
-
-## Per-device configurable sensors (devices_json)
-
-You can now configure **each device and each sensor** independently via `devices_json` in the add-on options.
-Set it to a JSON array of device objects. Example:
-
-```json
-[
-  {
-    "ip": "10.60.23.11",
-    "name": "compressor_a",
-    "interval": 10,
-    "timeout": 5,
-    "mqtt": {
-      "discovery_prefix": "homeassistant",
-      "host": "mqtt.local",
-      "port": 1883
-    },
-    "question_hex": "300201300203...",
-    "translation": {
-      "sensors": {
-        "service_a": {"name": "Service A Remaining"},
-        "vsd_1_20": {"enabled": false}
-      }
-    },
-    "sensors": {
-      "pressure_bar": {"name": "Line Pressure", "unit": "bar"},
-      "service_b": {"enabled": true, "name": "Service B Remaining"}
-    }
-  }
-]
-```
-
-- In `sensors` or `translation.sensors`, set `"enabled": false` to hide a sensor from discovery and publishing.
-- You can **add entirely new keys** by providing `pair`, `part`, and `decode`.
-- Per-device `mqtt` settings override global ones if provided.
+Only the values you set are applied; others stay at their defaults.
