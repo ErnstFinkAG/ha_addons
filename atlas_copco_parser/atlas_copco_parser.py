@@ -36,21 +36,23 @@ QUESTION_HEX = (
 # Map compressor "type" to a preset QUESTION and (optionally) a sensor map.
 # If "sensors" is omitted or None, the default SENSORS is used.
 PRESETS: Dict[str, Dict[str, Any]] = {
-    "GA15VS23A": {"question_hex": ""},
-    "GA15VP_13": {"question_hex": ""},
+    "GA15VS23A": {"question_hex": "", "sensors": {}},
+    "GA15VP_13": {"question_hex": "", "sensors": {}},
 }
 
-def resolve_preset(type_name: str) -> str:
+def resolve_preset(type_name: str) -> Tuple[str, Dict[str, Dict[str, Any]]]:
     key = (type_name or "").strip().upper().replace("-", "_")
     if key not in PRESETS:
         raise ValueError(f"Unknown compressor type: {type_name}")
-    qhex = PRESETS[key].get("question_hex","")
-    if not qhex.strip():
+    qhex = PRESETS[key].get("question_hex", "")
+    if not isinstance(qhex, str) or not qhex.strip():
         raise ValueError(f"No question configured for type {type_name}")
-    return re.sub(r"\s+", "", qhex)
+    sens_over = PRESETS[key].get("sensors") or {}
+    merged = dict(SENSORS)
+    for k, o in sens_over.items():
+        mm = dict(merged.get(k, {})); mm.update({kk: vv for kk, vv in o.items() if vv is not None}); merged[k] = mm
+    return re.sub(r"\\s+", "", qhex), merged
 
-
-# ------------------------- Helpers ------------------------
 def file_sha256(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -332,7 +334,7 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
 
     session = requests.Session()
 
-    qhex = re.sub(r"\s+", "", (question_hex or QUESTION_HEX))
+    qhex = re.sub(r"\s+", "", question_hex)
     keys = build_keys_from_question(qhex)
 
     while not stop_event.is_set():
