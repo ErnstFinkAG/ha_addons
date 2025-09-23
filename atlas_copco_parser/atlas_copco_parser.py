@@ -32,6 +32,24 @@ QUESTION_HEX = (
     "300108"
 )
 
+# ------------------------------ Presets --------------------------------------
+# Map compressor "type" to a preset QUESTION and (optionally) a sensor map.
+# If "sensors" is omitted or None, the default SENSORS is used.
+PRESETS: Dict[str, Dict[str, Any]] = {
+    "GA15VS23A": {"question_hex": ""},
+    "GA15VP_13": {"question_hex": ""},
+}
+
+def resolve_preset(type_name: str) -> str:
+    key = (type_name or "").strip().upper().replace("-", "_")
+    if key not in PRESETS:
+        raise ValueError(f"Unknown compressor type: {type_name}")
+    qhex = PRESETS[key].get("question_hex","")
+    if not qhex.strip():
+        raise ValueError(f"No question configured for type {type_name}")
+    return re.sub(r"\s+", "", qhex)
+
+
 # ------------------------- Helpers ------------------------
 def file_sha256(path: str) -> str:
     h = hashlib.sha256()
@@ -147,7 +165,7 @@ def load_per_item_translation_from_opts(opts: dict) -> None:
         "_service_remaining_6000": ["6000-","serviceb","b-"],
     }
     overrides = {}
-    for key, meta in SENSORS.items():
+    for key, meta in sensors_def.items():
         o = {}
         v = opts.get(f"{key}_name")
         if isinstance(v, str) and v.strip():
@@ -226,7 +244,7 @@ def csv_list(s: str) -> List[str]:
     return [x.strip() for x in s.split(",")] if s and s.strip() else []
 
 
-def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix: str):
+def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix: str, sensors_def: Dict[str, Dict[str, Any]]):
     """
     Publish MQTT Discovery with clean entity ids:
     - node_id (topic segment) = base_slug
@@ -241,7 +259,7 @@ def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix
         "name": name,
     }
     avail_topic = f"{base_slug}/availability"
-    for key, meta in SENSORS.items():
+    for key, meta in sensors_def.items():
         is_binary = (meta.get("kind", "sensor") == "binary_sensor")
         platform = "binary_sensor" if is_binary else "sensor"
         # New, clean topic: .../<platform>/<node_id>/<object_id>/config  with object_id = key only
@@ -300,7 +318,7 @@ def single_pair_read(session: requests.Session, ip: str, pair: str, timeout: int
     return tok
 
 def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
-           mqtt_settings: dict, scaling_overrides: Dict[str, float], question_hex: str):
+           mqtt_settings: dict, scaling_overrides: Dict[str, float], question_hex: str, sensors_def: Dict[str, Dict[str, Any]]):
     base_slug = slugify(name or ip)
     cli = mqtt.Client(client_id=f"mk5s_{base_slug}", clean_session=True)
     if mqtt_settings.get("user") or mqtt_settings.get("password"):
@@ -309,7 +327,7 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
     cli.will_set(avail_topic, payload="offline", retain=True)
     cli.connect(mqtt_settings["host"], int(mqtt_settings["port"]), keepalive=60)
 
-    mqtt_discovery(cli, base_slug, name, mqtt_settings["discovery_prefix"])
+    mqtt_discovery(cli, base_slug, name, mqtt_settings["discovery_prefix"], sensors_def)
     cli.publish(avail_topic, "online", retain=True)
 
     session = requests.Session()
@@ -346,7 +364,7 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
                     pair_raw[pair] = tok
 
         # Decode & publish
-        for key, meta in SENSORS.items():
+        for key, meta in sensors_def.items():
             pair = meta["pair"].upper()
             raw8 = pair_raw.get(pair)
             if raw8 is None:
@@ -402,7 +420,7 @@ def main():
     ip_list = csv_list(opts.get("ip_list", ""))
     name_list = csv_list(opts.get("name_list", ""))
     interval_list = csv_list(opts.get("interval_list", ""))
-    question_list = csv_list(opts.get("question_list", ""))
+    type_list = csv_list(opts.get("type_list", ""))
     timeout_list = csv_list(opts.get("timeout_list", ""))
     verbose_list = csv_list(opts.get("verbose_list", ""))
 
@@ -432,6 +450,8 @@ def main():
     threads: List[threading.Thread] = []
     for i, ip in enumerate(ip_list):
         name = pick(name_list, i, ip)
+        ctype = (type_list[i] if i < len(type_list) else "DEFAULT")
+        qhex, sensors_def = resolve_preset(ctype)
         qhex = question_list[i]
         try:
             interval = int(pick(interval_list, i, "10"))

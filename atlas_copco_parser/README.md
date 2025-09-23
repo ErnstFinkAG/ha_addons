@@ -110,14 +110,21 @@ Each sensor can be overridden via four fields:
 Only the values you set are applied; others stay at their defaults.
 
 
-## Per-device question strings (required)
 
-You can supply a question per device using a CSV that lines up with `ip_list`/`name_list`:
 
+## Compressor type presets
+
+Instead of raw hex questions, set a **type** per device using `type_list` (CSV aligned with `ip_list`/`name_list`). The add-on selects the matching QUESTION and parsing profile.
+
+Supported types:
+- `DEFAULT` (built-in)
+- `GA15VS23A`
+- `GA15VP_13`
+
+Example:
 ```yaml
 ip_list: "10.60.23.11,10.60.23.12"
 name_list: "compressor_a,compressor_b"
-question_list: "300201300203...,300201300205..."
+type_list: "GA15VS23A,GA15VP_13"
 ```
-
-- `question_list[i]` must be provided for every device; there is no global fallback.
+If a type is unknown, the add-on falls back to `DEFAULT`.

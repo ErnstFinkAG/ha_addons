@@ -10,6 +10,7 @@ init: false
 host_network: true
 homeassistant_api: false
 options:
+  type_list: "DEFAULT"
   pressure_bar_name: ""
   pressure_bar_key: ""
   pressure_bar_encoding: ""
@@ -1011,19 +1012,18 @@ options:
   interval_list: "10"
   timeout_list: "5"
   verbose_list: "true"
-  question_list: ""
   mqtt_host: "localhost"
   mqtt_port: 1883
   mqtt_user: "mqtt_user"
   mqtt_password: "mqtt_password"
   discovery_prefix: "homeassistant"
 schema:
+  type_list: str
   ip_list: str
   name_list: str
   interval_list: str
   timeout_list: str
   verbose_list: str
-  question_list: str?
   mqtt_host: str
   mqtt_port: int
   mqtt_user: str
