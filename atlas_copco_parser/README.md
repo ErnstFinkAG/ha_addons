@@ -1,41 +1,55 @@
-# Atlas Copco Parser (v0.0.7)
+# Atlas Copco Parser (updated)
 
-- Sequential polling only (no parallelism), as requested.
-- Extremely verbose logging per line: model, question_var (the variable name), key, pair (e.g. 3007.01), question (e.g. 300701), encoding (part/decoder), bytes (hex), raw, calculation formula, computed value + unit, and MQTT topic.
-- Uses the exact sensor maps you provided for **GA15VS23A** and **GA15VP13**.
-- Fixes indentation around `autodetect` and `bus` initialisation.
-- MQTT topics: `atlas_copco/<slug(device_name)>/sensor/<slug(key)>` (same slugging you saw: hyphens → underscores).
+Version: 0.0.7
 
-## Environment variables
+- Sequential polling only (no parallel).
+- Extremely verbose per-signal log line includes:
+  `model, question_var, key, pair, question, encoding, bytes, raw, calc, unit, topic`
+- Fixed/configurable MQTT client_id to avoid rc=5 when broker ACLs expect a stable identifier.
+- Sensor maps for `GA15VS23A` and `GA15VP13` (as provided).
+- HTTP question URL is **configurable** via `question_templates` so you can match your device API without code changes.
 
+## Config
+
+Create `/config/config.yml` (or set `ACPARSER_CONFIG` env) like:
+
+```yaml
+mqtt:
+  host: 127.0.0.1
+  port: 1883
+  user: myuser
+  password: mypass
+  client_id: atlas_copco_parser
+  tls: false
+
+discovery_prefix: homeassistant
+
+# List of templates tried in order. Must contain {ip} and {question}
+question_templates:
+  - "http://{ip}/q?m={question}"
+  - "http://{ip}/mem/{question}"
+  - "http://{ip}/api/mb?m={question}"
+
+devices:
+  - name: eftool-bw-b2-f3-air11
+    ip: 10.60.23.11
+    device_type: GA15VP13
+  - name: eftool-bw-b2-f3-air12
+    ip: 10.60.23.12
+    device_type: GA15VS23A
 ```
-MQTT_HOST=...
-MQTT_PORT=1883
-MQTT_USER=...
-MQTT_PASSWORD=...
 
-ATLAS_IPS=10.60.23.11,10.60.23.12
-ATLAS_NAMES=eftool-bw-b2-f3-air11,eftool-bw-b2-f3-air12
-ATLAS_MODELS=GA15VP13,GA15VS23A
-
-# Optional
-ATLAS_TIMEOUTS=2,2
-ATLAS_INTERVALS=10,10
-ATLAS_VERBOSITY=1,1
-DISCOVERY_PREFIX=homeassistant
-AUTODETECT=true
-
-# If you need a custom HTTP endpoint format for reading registers:
-ATLAS_ENDPOINT_TEMPLATE="http://{ip}/?q={question}"
+Or provide environment variable for devices:
+```
+ACPARSER_DEVICES="eftool-bw-b2-f3-air11,10.60.23.11,GA15VP13;eftool-bw-b2-f3-air12,10.60.23.12,GA15VS23A"
 ```
 
-> **Note**: `fetch_pair_bytes` is a minimal HTTP reader. If your controllers use a different protocol, plug in your existing code there. The rest (maps, decoding, logging, MQTT) is wired and ready.
+## MQTT
 
-## Run
+- Topics: `atlas_copco/<slug(name)>/sensor/<key>`
+- Payload: JSON number or `null`
 
-```
-python3 atlas_copco_parser.py
-```
+## Notes
 
-Stop with SIGTERM / Ctrl+C – you'll see `signal 15 received, exiting...` then `shutdown complete.`
-
+- If you see `MQTT connected rc=5 (Not authorized)`, either credentials/ACLs are wrong **or** your broker rejects changing client IDs. Set a fixed `mqtt.client_id` or `MQTT_CLIENT_ID` env.
+- If fetch fails, adjust `question_templates` to the correct device endpoint that returns 4 bytes per question.

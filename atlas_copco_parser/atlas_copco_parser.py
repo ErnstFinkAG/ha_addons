@@ -1,40 +1,105 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
-Atlas Copco Parser – version 0.0.7
-- Sequential polling (no parallel threads) as requested
-- Detailed per-value logging showing:
-  model, question_var, key, pair, question, encoding (part/decoder),
-  bytes (hex), raw (int), calculation string, resulting value with unit,
-  and MQTT topic.
-- Uses explicit per-model sensor maps (GA15VS23A and GA15VP13 provided).
-- Publishes to MQTT with topic atlas_copco/<slug(name)>/sensor/<slug(key)>
-- Fixes indentation issues in setup section (auto, bus)
+Atlas Copco parser with:
+- Sequential polling (no parallel)
+- Very verbose per-signal logging (pair, question var name, question string, encoding, bytes, raw, calc, unit, topic)
+- Fixed or configurable MQTT client_id to avoid rc=5 "Not authorized"
+- Sensor maps for GA15VS23A and GA15VP13 (as provided)
+- Pluggable HTTP question templates to fetch 4-byte values from device (best-effort; make sure to set correct template in config)
+- Home Assistant discovery prefix preserved (configurable)
 """
 
 import os
 import sys
 import time
 import json
-import signal
 import logging
-import socket
-from typing import Dict, Any, Optional, Tuple, List
+import threading
+import signal
+from typing import Any, Dict, Optional, Tuple, List
 
+import requests
+from requests import Session
+import paho.mqtt.client as mqtt
 try:
-    import requests
-except Exception:  # pragma: no cover
-    requests = None  # In some environments, only the structure is needed
+    import yaml  # type: ignore
+except Exception:
+    yaml = None
 
-try:
-    import paho.mqtt.client as mqtt
-except Exception:  # pragma: no cover
-    mqtt = None
-
+APP_NAME = "atlas_copco_parser"
 VERSION = "0.0.7"
 
-# ---------------- Sensor maps ----------------
-SENSORS_GA15VS23A: Dict[str, Dict[str, Any]] = {
+# ---------------- Logging ----------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+log = logging.getLogger(APP_NAME)
+
+# ---------------- Helpers ----------------
+def slugify(s: str) -> str:
+    out = []
+    for ch in s.lower():
+        if ch.isalnum():
+            out.append(ch)
+        elif ch in (" ", "-", ".", "/", "\\"):
+            out.append("_")
+        else:
+            out.append("_")
+    return "".join(out).strip("_")
+
+def env_bool(name: str, default: bool = False) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return str(val).strip().lower() in ("1","true","yes","on")
+
+def read_yaml_config(path: str) -> Dict[str, Any]:
+    if not yaml:
+        return {}
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+# ---------------- Decoders ----------------
+def _id(x: Optional[int]) -> Optional[int]:
+    return None if x is None else int(x)
+
+def _div10(x: Optional[int]) -> Optional[float]:
+    return None if x is None else x / 10.0
+
+def _div1000(x: Optional[int]) -> Optional[float]:
+    return None if x is None else x / 1000.0
+
+def _times1000(x: Optional[int]) -> Optional[int]:
+    return None if x is None else x * 1000
+
+def _hours_from_seconds_u32(x: Optional[int]) -> Optional[float]:
+    return None if x is None else x / 3600.0
+
+def percent_from_bucket(x: Optional[int]) -> Optional[float]:
+    # Observed mapping: raw seems to be millis of total 65535*1000
+    if x is None:
+        return None
+    denom = 65535.0 * 1000.0
+    return (x / denom) * 100.0
+
+DECODERS = {
+    "_id": _id,
+    "_div10": _div10,
+    "_div1000": _div1000,
+    "_times1000": _times1000,
+    "_hours_from_seconds_u32": _hours_from_seconds_u32,
+    "_percent_from_bucket": percent_from_bucket,
+}
+
+# ---------------- Sensor maps (provided) ----------------
+from typing import Dict as _Dict
+SENSORS_GA15VS23A: _Dict[str, _Dict[str, Any]] = {
     "machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"},
     "controller_temperature": {"pair":"3002.01","part":"hi","decode":"_div10","unit":"°C","device_class":"temperature","state_class":"measurement","name":"Controller Temperature"},
     "compressor_outlet":      {"pair":"3002.24","part":"hi","decode":"_div1000","unit":"bar","device_class":"pressure","state_class":"measurement","name":"Compressor Outlet"},
@@ -79,11 +144,9 @@ SENSORS_GA15VS23A: Dict[str, Dict[str, Any]] = {
     "service_a_2":            {"pair":"3113.51","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service A 2"},
     "service_b_1":            {"pair":"3113.52","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 1"},
     "service_b_2":            {"pair":"3113.53","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 2"},
-    "service_d_1":            {"pair":"3113.54","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service D 1"},
-    "service_d_2":            {"pair":"3113.55","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service D 2"},
 }
 
-SENSORS_GA15VP13: Dict[str, Dict[str, Any]] = {
+SENSORS_GA15VP13: _Dict[str, _Dict[str, Any]] = {
     "machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"},
     "compressor_outlet":      {"pair":"3002.01","part":"hi","decode":"_div1000","unit":"bar","device_class":"pressure","state_class":"measurement","name":"Compressor Outlet"},
     "element_outlet":         {"pair":"3002.03","part":"hi","decode":"_div10","unit":"°C","device_class":"temperature","state_class":"measurement","name":"Element Outlet"},
@@ -118,368 +181,288 @@ SENSORS_GA15VP13: Dict[str, Dict[str, Any]] = {
     "service_b_2":            {"pair":"3113.53","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 2"},
 }
 
-MODEL_MAPS: Dict[str, Dict[str, Dict[str, Any]]] = {
+MODEL_MAP: Dict[str, Dict[str, Any]] = {
     "GA15VS23A": SENSORS_GA15VS23A,
     "GA15VP13": SENSORS_GA15VP13,
 }
 
-# ---------------- Utilities ----------------
-def slugify(s: str) -> str:
-    out = []
-    prev_us = False
-    for ch in s.lower():
-        if ch.isalnum():
-            out.append(ch)
-            prev_us = False
-        else:
-            if not prev_us:
-                out.append("_")
-            prev_us = True
-    res = "".join(out).strip("_")
-    while "__" in res:
-        res = res.replace("__", "_")
-    return res
-
-
-def hex_or_none(b: Optional[bytes]) -> Optional[str]:
-    if b is None:
-        return None
-    return b.hex()
-
-
-def decode_raw_from_part(b: Optional[bytes], part: str) -> Optional[int]:
-    if b is None:
-        return None
-    try:
-        if part == "u32":
-            if len(b) >= 4:
-                return int.from_bytes(b[0:4], "big", signed=False)
-            return int.from_bytes(b, "big", signed=False)
-        elif part == "hi":
-            if len(b) >= 2:
-                return int.from_bytes(b[0:2], "big", signed=False)
-            return int.from_bytes(b, "big", signed=False)
-        elif part == "lo":
-            if len(b) >= 4:
-                return int.from_bytes(b[2:4], "big", signed=False)
-            elif len(b) >= 2:
-                return int.from_bytes(b[-2:], "big", signed=False)
-            return int.from_bytes(b, "big", signed=False)
-        else:
-            # default treat as u32
-            return int.from_bytes(b, "big", signed=False)
-    except Exception:
-        return None
-
-
-def hours_from_seconds_u32(raw: Optional[int]) -> Optional[float]:
-    return None if raw is None else (raw / 3600.0)
-
-
-def percent_from_buckets(v: Optional[int], totals: Optional[int]) -> Optional[float]:
-    if v is None or not totals or totals <= 0:
-        return None
-    # two decimal places to match expected formatting
-    return round((v * 100.0) / float(totals), 2)
-
-
-def apply_decode(decode: str, raw: Optional[int], ctx: Dict[str, Any]) -> Tuple[Optional[float], str]:
-    """
-    Returns (value, calc_str)
-    """
-    if decode == "_id":
-        return (None if raw is None else float(raw) if isinstance(raw, (int, float)) else None,
-                "value = _id(raw)")
-    if decode == "_div10":
-        return (None if raw is None else raw / 10.0, "value = raw/10.0")
-    if decode == "_div1000":
-        return (None if raw is None else raw / 1000.0, "value = raw/1000.0")
-    if decode == "_times1000":
-        return (None if raw is None else raw * 1000.0, "value = _times1000(raw)")
-    if decode == "_hours_from_seconds_u32":
-        return (hours_from_seconds_u32(raw), "value = raw/3600.0")
-    if decode == "_percent_from_bucket":
-        total = ctx.get("vsd_total_raw")
-        return (percent_from_buckets(raw, total), "value = percent_from_bucket(raw)")
-    # fallback
-    return (None if raw is None else float(raw), "value = raw")
-
-
+# ---------------- MQTT Bus ----------------
 class MqttBus:
-    def __init__(self, host: str, port: int, user: Optional[str], password: Optional[str], client_id: str):
+    def __init__(self, host: str, port: int, username: Optional[str], password: Optional[str], client_id: str, tls: bool=False):
+        self.client = mqtt.Client(client_id=client_id, clean_session=True)
+        if username:
+            self.client.username_pw_set(username, password or None)
+        self.client.on_connect = self.on_connect
+        self.client.on_disconnect = self.on_disconnect
+        if tls:
+            self.client.tls_set()
         self.host = host
         self.port = port
-        self.user = user
-        self.password = password
-        self.client_id = client_id
-        self.client = None
+        self._connected = threading.Event()
+        self.client.loop_start()
 
-        if mqtt is not None:
-            self.client = mqtt.Client(client_id=self.client_id, clean_session=True, protocol=mqtt.MQTTv311)
-            if user or password:
-                self.client.username_pw_set(user, password)
-            self.client.on_connect = self._on_connect
-            self.client.connect_async(self.host, self.port, keepalive=30)
-            self.client.loop_start()
-        else:  # pragma: no cover
-            logging.warning("paho-mqtt not available; MQTT publish will be no-ops.")
+    def on_connect(self, client, userdata, flags, rc):
+        RC_TEXT = {
+            0: "Connection accepted",
+            1: "Unacceptable protocol version",
+            2: "Identifier (client_id) rejected",
+            3: "Server unavailable",
+            4: "Bad username or password",
+            5: "Not authorized (check ACLs / client_id / TLS policy)"
+        }
+        fn = log.info if rc == 0 else log.error
+        fn("MQTT connected rc=%s (%s)", rc, RC_TEXT.get(rc, "Unknown"))
+        if rc == 0:
+            self._connected.set()
 
-    def _on_connect(self, _client, _userdata, _flags, rc):
-        logging.info("MQTT connected rc=%s", rc)
+    def on_disconnect(self, client, userdata, rc):
+        log.warning("MQTT disconnected rc=%s", rc)
+        self._connected.clear()
 
-    def publish(self, topic: str, payload: str, retain: bool = True, qos: int = 0) -> None:
-        if self.client is None:  # pragma: no cover
-            return
+    def connect(self, timeout: float = 10.0):
+        self.client.connect_async(self.host, self.port, keepalive=30)
+        self.client.loop_start()
+        if not self._connected.wait(timeout):
+            log.error("MQTT connect timeout")
+        return self._connected.is_set()
+
+    def publish(self, topic: str, payload: str, retain: bool=False, qos: int=0):
+        if not self._connected.is_set():
+            log.warning("Publish while MQTT not connected: %s", topic)
+        self.client.publish(topic, payload=payload, qos=qos, retain=retain)
+
+    def stop(self):
         try:
-            self.client.publish(topic, payload=payload, qos=qos, retain=retain)
-        except Exception as e:  # pragma: no cover
-            logging.warning("MQTT publish failed: %r", e)
+            self.client.loop_stop()
+        except Exception:
+            pass
+        try:
+            self.client.disconnect()
+        except Exception:
+            pass
 
-
+# ---------------- Fetching ----------------
 def build_question(pair: str) -> str:
-    # "3007.01" -> "300701"
-    return pair.replace(".", "")
+    # "3007.25" -> "300725"
+    return pair.replace(".", "").strip()
 
+def split_part_from_bytes(part: str, b: Optional[bytes]) -> Tuple[Optional[int], str]:
+    """
+    Interpret 4-byte BE payload depending on part:
+    - 'u32': use full 32-bit
+    - 'hi': use high 16 bits
+    - 'lo': use low 16 bits
+    Returns (raw_value, part_used)
+    """
+    if b is None or len(b) != 4:
+        return None, part
+    v = int.from_bytes(b, byteorder="big", signed=False)
+    if part == "u32":
+        return v, part
+    elif part == "hi":
+        return (v >> 16) & 0xFFFF, part
+    elif part == "lo":
+        return v & 0xFFFF, part
+    else:
+        # default to u32
+        return v, "u32"
 
-def fetch_pair_bytes(session: Any, ip: str, question: str, timeout: float) -> Optional[bytes]:
+def decode_value(decode: str, raw: Optional[int]) -> Tuple[Optional[Any], str]:
+    fn = DECODERS.get(decode)
+    if not fn:
+        return raw, f"value = {raw!r}"
+    if fn is percent_from_bucket:
+        out = fn(raw)
+        return out, "value = percent_from_bucket(raw)"
+    elif fn is _div10:
+        out = fn(raw)
+        return out, "value = raw/10.0"
+    elif fn is _div1000:
+        out = fn(raw)
+        return out, "value = raw/1000.0"
+    elif fn is _times1000:
+        out = fn(raw)
+        return out, "value = _times1000(raw)"
+    elif fn is _hours_from_seconds_u32:
+        out = fn(raw)
+        return out, "value = raw/3600.0"
+    else:
+        out = fn(raw)
+        return out, "value = _id(raw)"
+
+def fetch_bytes_with_templates(session: Session, ip: str, question: str, templates: List[str]) -> Tuple[Optional[bytes], str]:
     """
-    Replace this with the actual protocol for your controllers.
-    This default implementation tries a simple HTTP GET against two common patterns.
+    Try each template in order until one returns 4 raw bytes.
+    The {ip} and {question} placeholders will be formatted.
+    Returns (bytes or None, template_var_name)
     """
-    if requests is None:
-        return None
-    templates = [
-        os.getenv("ATLAS_ENDPOINT_TEMPLATE") or "http://{ip}/q/{question}",
-        "http://{ip}/?q={question}",
-    ]
-    for tmpl in templates:
+    # We name variables qs1, qs2... so the log shows a *variable name* not the literal string
+    for idx, tmpl in enumerate(templates, start=1):
+        var_name = f"qs{idx}"
         url = tmpl.format(ip=ip, question=question)
         try:
-            r = session.get(url, timeout=timeout)
-            r.raise_for_status()
-            # Expect raw binary; if hex string, convert
-            if r.headers.get("Content-Type", "").lower().startswith("application/octet-stream"):
-                return r.content
-            text = r.text.strip()
-            # If looks like hex: e.g. "0003776a"
-            if all(c in "0123456789abcdefABCDEF" for c in text) and len(text) % 2 == 0:
+            r = session.get(url, timeout=5)
+            if r.status_code == 200:
+                # Accept raw bytes (len 4) or hex string
+                content = r.content
+                if len(content) == 4:
+                    return content, var_name
+                # Try parse as plain hex in body or JSON {"bytes":"00112233"}
+                txt = r.text.strip()
+                if len(txt) == 8 and all(c in "0123456789abcdefABCDEF" for c in txt):
+                    return bytes.fromhex(txt), var_name
                 try:
-                    return bytes.fromhex(text)
+                    j = r.json()
+                    if isinstance(j, dict):
+                        hb = j.get("bytes") or j.get("data") or j.get("raw")
+                        if isinstance(hb, str) and len(hb.strip()) == 8:
+                            return bytes.fromhex(hb.strip()), var_name
                 except Exception:
                     pass
-            # Otherwise, try JSON {"bytes":"0003776a"}
-            try:
-                data = r.json()
-                if isinstance(data, dict) and "bytes" in data and isinstance(data["bytes"], str):
-                    return bytes.fromhex(data["bytes"])
-            except Exception:
-                pass
-            # Fallback: None
-            return None
-        except Exception as e:
-            last_exc = e
-    # If all attempts failed, bubble last
-    raise last_exc  # type: ignore
+        except requests.RequestException as e:
+            log.warning("fetch error on %s: %s", var_name, e)
+    return None, "qs_none"
 
-
-def read_one(session, ip: str, key: str, spec: Dict[str, Any], ctx: Dict[str, Any], device_name: str, model: str, discovery_prefix: str, base_prefix: str, bus: MqttBus, verbose: int) -> None:
-    pair = spec["pair"]
-    part = spec["part"]
-    decode = spec["decode"]
+# ---------------- Polling ----------------
+def publish_sensor(bus: MqttBus, base: str, name: str, sensor_key: str, spec: Dict[str, Any],
+                   bytes_data: Optional[bytes], raw_val: Optional[int], value: Optional[Any]):
     unit = spec.get("unit")
-    question = build_question(pair)
+    topic = f"{base}/{slugify(sensor_key)}"
+    # Payload: null if value is None else JSON-encoded primitive
+    payload = "null" if value is None else json.dumps(value)
+    log.info("[%s] model=%s question_var=%s key=%s pair=%s question=%s encoding=%s bytes=%s raw=%s calc=%s%s topic=%s",
+             name,
+             spec.get("_model"),
+             spec.get("_question_var"),
+             sensor_key,
+             spec.get("pair"),
+             spec.get("_question"),
+             f"{spec.get('part')}/{spec.get('decode')}",
+             (bytes_data.hex() if bytes_data else ""),
+             (raw_val if raw_val is not None else "None"),
+             spec.get("_calc_str"),
+             (f" {unit}" if unit else ""),
+             topic)
+    bus.publish(topic, payload, retain=True)
 
-    b: Optional[bytes] = None
-    raw: Optional[int] = None
-    exc: Optional[Exception] = None
+def poll_device_once(bus: MqttBus, session: Session, ip: str, name: str, device_type: str,
+                     discovery_prefix: str, question_templates: List[str]):
+    sensors = MODEL_MAP.get(device_type)
+    if not sensors:
+        log.error("[%s] Unknown device_type=%s", name, device_type)
+        return
 
-    try:
-        b = fetch_pair_bytes(session, ip, question, timeout=ctx["timeout"])
-        raw = decode_raw_from_part(b, part)
-    except Exception as e:
-        exc = e
+    base = f"atlas_copco/{slugify(name)}/sensor"
 
-    if exc is not None:
-        logging.warning("pair %s exc: %r", pair, exc)
+    for key, spec0 in sensors.items():
+        spec = dict(spec0)  # copy
+        spec["_model"] = device_type
 
-    calc_val, calc_str = apply_decode(decode, raw, ctx)
+        pair = spec["pair"]
+        part = spec["part"]
+        decode = spec["decode"]
+        unit = spec.get("unit")
 
-    # Quick unit suffix formatting
-    value_str = "null" if calc_val is None else (("%g" % calc_val) if unit is None else ("%g %s" % (calc_val, unit)))
-    # hex or None
-    hex_bytes = hex_or_none(b)
+        question = build_question(pair)
+        bytes_data, qvar = fetch_bytes_with_templates(session, ip, question, question_templates)
+        spec["_question_var"] = qvar
+        spec["_question"] = question
 
-    slug_dev = slugify(device_name)
-    topic = f"{base_prefix}/{slug_dev}/sensor/{slugify(key)}"
+        raw_val, used_part = split_part_from_bytes(part, bytes_data)
 
-    # log line in the requested verbose format
-    # Show the variable name for "question string" (question_var = model)
-    encoding = f"{part}/{decode}"
+        value, calc_str = decode_value(decode, raw_val)
+        spec["_calc_str"] = calc_str
 
-    logging.info("[%s] model=%s question_var=%s key=%s pair=%s question=%s encoding=%s bytes=%s raw=%s calc=%s -> value=%s topic=%s",
-                 device_name, model, model, key, pair, question, encoding,
-                 hex_bytes if hex_bytes is not None else "",
-                 "None" if raw is None else str(raw),
-                 calc_str, value_str, topic)
+        publish_sensor(bus, base, name, key, spec, bytes_data, raw_val, value)
 
-    # Publish to MQTT
-    payload = "null" if calc_val is None else json.dumps(calc_val)
-    bus.publish(topic, payload)
-
-    # for HA discovery you might publish additional config topics; omitted here intentionally
-
-
-def pick_sensor_map(model: str) -> Dict[str, Dict[str, Any]]:
-    return MODEL_MAPS.get(model, {})
-
-
-RUNNING = True
-
-
-def handle_sigterm(_signo, _frame):
-    global RUNNING
-    logging.info("signal 15 received, exiting...")
-    RUNNING = False
-
-
+# ---------------- Main ----------------
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    logging.info("[atlas_copco_parser] starting...")
+    # Config precedence: env -> config.yml -> defaults
+    cfg_path = os.environ.get("ACPARSER_CONFIG", "/config/config.yml")
+    cfg = read_yaml_config(cfg_path) if os.path.exists(cfg_path) else {}
 
-    # ----- Options from env (Home Assistant add-on style) -----
-    mqtt_host = os.getenv("MQTT_HOST", "localhost")
-    mqtt_port = int(os.getenv("MQTT_PORT", "1883"))
-    mqtt_user = os.getenv("MQTT_USER", "") or None
-    mqtt_password = os.getenv("MQTT_PASSWORD", "") or None
-
-    # Device config (CSV aligned by index)
-    ips = [s.strip() for s in os.getenv("ATLAS_IPS", "").split(",") if s.strip()]
-    names = [s.strip() for s in os.getenv("ATLAS_NAMES", "").split(",") if s.strip()]
-    models = [s.strip() for s in os.getenv("ATLAS_MODELS", "").split(",") if s.strip()]
-
-    # align lengths
-    n = min(len(ips), len(names), len(models))
-    ips, names, models = ips[:n], names[:n], models[:n]
-
-    # Per-device timeouts/intervals
-    timeouts = [float(x) if x else 2.0 for x in os.getenv("ATLAS_TIMEOUTS", "").split(",")] if os.getenv("ATLAS_TIMEOUTS") else [2.0] * n
-    intervals = [float(x) if x else 10.0 for x in os.getenv("ATLAS_INTERVALS", "").split(",")] if os.getenv("ATLAS_INTERVALS") else [10.0] * n
-    verboses = [int(x) if x else 1 for x in os.getenv("ATLAS_VERBOSITY", "").split(",")] if os.getenv("ATLAS_VERBOSITY") else [1] * n
-
-    discovery_prefix = os.getenv("DISCOVERY_PREFIX", "homeassistant")
-
-    # Indentation fixes: keep these left-aligned with discovery_prefix
-    auto = bool(str(os.getenv("AUTODETECT", "true")).lower() in ("1","true","yes","on"))
-    bus = MqttBus(mqtt_host, mqtt_port, mqtt_user, mqtt_password, client_id=f"atlas_copco_{int(time.time())}")
-
-    sessions = []
-    if requests is not None:
-        for _ in range(n):
-            sessions.append(requests.Session())
-    else:
-        sessions = [object()] * n  # stubs
-
-    # Force sequential mode as requested
-    logging.info("Sequential mode enabled (forced): polling one device at a time.")
-
-    signal.signal(signal.SIGTERM, handle_sigterm)
-
-    # Poll loop
-    while RUNNING:
-        cycle_start = time.time()
-        for i in range(n):
-            if not RUNNING:
-                break
-            ip = ips[i]
-            name = names[i]
-            model = models[i]
-            timeout = timeouts[i] if i < len(timeouts) else 2.0
-            interval = intervals[i] if i < len(intervals) else 10.0
-            verbose = verboses[i] if i < len(verboses) else 1
-
-            sensor_map = pick_sensor_map(model)
-            if not sensor_map:
-                logging.warning("[%s] Unknown model '%s' – skipping", name, model)
+    devices = cfg.get("devices") or []
+    # Also allow env shortcuts:
+    # ACPARSER_DEVICES="name,ip,model;name2,ip2,model2"
+    env_devices = os.environ.get("ACPARSER_DEVICES")
+    if env_devices and not devices:
+        tmp = []
+        for chunk in env_devices.split(";"):
+            if not chunk.strip():
                 continue
+            name, ip, model = [x.strip() for x in chunk.split(",")]
+            tmp.append({"name": name, "ip": ip, "device_type": model})
+        devices = tmp
 
-            session = sessions[i]
+    if not devices:
+        log.error("No devices configured. Set devices:[] in %s or ACPARSER_DEVICES env.", cfg_path)
+        sys.exit(1)
 
-            # First pass: read all bytes/raw into ctx
-            ctx: Dict[str, Any] = {"timeout": timeout}
-            per_key_bytes: Dict[str, Optional[bytes]] = {}
-            per_key_raw: Dict[str, Optional[int]] = {}
+    mqtt_host = os.environ.get("MQTT_HOST", cfg.get("mqtt", {}).get("host", "localhost"))
+    mqtt_port = int(os.environ.get("MQTT_PORT", cfg.get("mqtt", {}).get("port", 1883)))
+    mqtt_user = os.environ.get("MQTT_USER", cfg.get("mqtt", {}).get("user") or "")
+    mqtt_password = os.environ.get("MQTT_PASSWORD", cfg.get("mqtt", {}).get("password") or "")
+    mqtt_client_id = os.environ.get("MQTT_CLIENT_ID") or cfg.get("mqtt", {}).get("client_id") or "atlas_copco_parser"
+    mqtt_tls = env_bool("MQTT_TLS", cfg.get("mqtt", {}).get("tls", False))
 
-            # Try to prefetch VSD buckets to compute percentages with a proper denominator
-            vsd_keys = [k for k in sensor_map.keys() if k.startswith("vsd_")]
-            # Read everything (sequentially)
-            for key, spec in sensor_map.items():
-                pair = spec["pair"]
-                part = spec["part"]
-                question = build_question(pair)
-                try:
-                    b = fetch_pair_bytes(session, ip, question, timeout=timeout)
-                    raw = decode_raw_from_part(b, part)
-                    per_key_bytes[key] = b
-                    per_key_raw[key] = raw
-                except Exception as e:
-                    per_key_bytes[key] = None
-                    per_key_raw[key] = None
-                    logging.warning("pair %s exc: %r", pair, e)
+    discovery_prefix = cfg.get("discovery_prefix", "homeassistant")
+    autodetect = env_bool("ACPARSER_AUTODETECT", str(cfg.get("autodetect", "true")).lower() in ("1","true","yes","on"))
 
-            # Compute denominator for vsd percentages
-            vsd_total_raw = sum((per_key_raw.get(k) or 0) for k in vsd_keys) if vsd_keys else None
-            if vsd_total_raw == 0:
-                vsd_total_raw = None
-            ctx["vsd_total_raw"] = vsd_total_raw
+    # Question URL templates
+    # Configure these to match the device HTTP API. Each must include {ip} and {question}.
+    question_templates = cfg.get("question_templates") or [
+        "http://{ip}/q?m={question}",
+        "http://{ip}/mem/{question}",
+        "http://{ip}/api/mb?m={question}",
+    ]
 
-            # Second pass: compute values, log, publish
-            base_prefix = "atlas_copco"
-            for key, spec in sensor_map.items():
-                # Reuse fetched bytes/raw to avoid second device hit
-                b = per_key_bytes.get(key)
-                raw = per_key_raw.get(key)
-                # Temporarily override fetch in context passing
-                # Compose calc/encoding
-                part = spec["part"]
-                decode = spec["decode"]
-                unit = spec.get("unit")
+    # Log start
+    log.info("%s starting...", APP_NAME)
+    log.info("Sequential mode enabled (forced): polling one device at a time.")
+    log.info("MQTT connect -> host=%s port=%s client_id=%s user=%s tls=%s",
+             mqtt_host, mqtt_port, mqtt_client_id, ("set" if mqtt_user else "none"), "on" if mqtt_tls else "off")
 
-                calc_val, calc_str = apply_decode(decode, raw, ctx)
+    bus = MqttBus(mqtt_host, mqtt_port, mqtt_user or None, mqtt_password or None, client_id=mqtt_client_id, tls=mqtt_tls)
+    bus.connect(timeout=10.0)
 
-                value_str = "null" if calc_val is None else (("%g" % calc_val) if unit is None else ("%g %s" % (calc_val, unit)))
-                hex_bytes = hex_or_none(b)
-                pair = spec["pair"]
-                question = build_question(pair)
-                encoding = f"{part}/{decode}"
-                slug_dev = slugify(name)
-                topic = f"{base_prefix}/{slug_dev}/sensor/{slugify(key)}"
-                logging.info("[%s] model=%s question_var=%s key=%s pair=%s question=%s encoding=%s bytes=%s raw=%s calc=%s -> value=%s topic=%s",
-                             name, model, model, key, pair, question, encoding,
-                             hex_bytes if hex_bytes is not None else "",
-                             "None" if raw is None else str(raw),
-                             calc_str, value_str, topic)
-                payload = "null" if calc_val is None else json.dumps(calc_val)
-                bus.publish(topic, payload)
+    # Graceful shutdown
+    stop_evt = threading.Event()
+    def handle_sig(signum, frame):
+        log.info("signal %s received, exiting...", signum)
+        stop_evt.set()
 
-            # Respect per-device interval (simple pacing)
-            if RUNNING:
-                time.sleep(interval)
+    for s in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(s, handle_sig)
 
-        # Minimal guard to avoid tight loop if no devices
-        if n == 0:
-            time.sleep(5.0)
+    session = requests.Session()
 
-    # graceful shutdown
-    time.sleep(0.1)
-    logging.info("shutdown complete.")
+    # Sequential poll forever
+    while not stop_evt.is_set():
+        for dev in devices:
+            ip = dev.get("ip")
+            name = dev.get("name") or ip
+            model = dev.get("device_type") or dev.get("model") or ""
+            if not ip or not model:
+                log.error("Skipping device with missing ip/model: %s", dev)
+                continue
+            try:
+                poll_device_once(bus, session, ip, name, model, discovery_prefix, question_templates)
+            except Exception as e:
+                log.exception("[%s] poll error: %s", name, e)
+            if stop_evt.is_set():
+                break
+        # sleep a short interval between rounds
+        stop_evt.wait(10.0)
 
+    bus.stop()
+    log.info("shutdown complete.")
+    return 0
 
 if __name__ == "__main__":
     try:
-        main()
-    except KeyboardInterrupt:
-        handle_sigterm(None, None)
+        sys.exit(main())
+    except SystemExit as e:
+        raise
+    except Exception as e:
+        log.exception("fatal: %s", e)
+        sys.exit(1)
