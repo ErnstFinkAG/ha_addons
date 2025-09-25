@@ -15,14 +15,12 @@ from typing import Dict, Any
 ALL_SENSOR_GROUPS: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
 GA15VS23A: Dict[str, Dict[str, Any]] = {
-"machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"
-}
+"machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"}
 
 ALL_SENSOR_GROUPS["GA15VS23A"] = GA15VS23A
 
 GA15VP13: Dict[str, Dict[str, Any]] = {
-"machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"
-}
+"machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"}
 
 ALL_SENSOR_GROUPS["GA15VP13"] = GA15VP13
 
