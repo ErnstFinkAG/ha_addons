@@ -1,62 +1,21 @@
+# Atlas Copco Parser — Home Assistant Add-on
 
-# Atlas Copco Parser (0.0.9)
+Polls Atlas Copco MK5s Touch controllers over HTTP and publishes sensors to MQTT with Home Assistant Discovery.
 
-Single-file parser with detailed logging and MQTT publishing.
-
-## Features
-- Sequential polling only (prevents value/key mixups).
-- Very verbose per-metric logs: model, key, pair, question, part/decoder, bytes, raw, calc, value, unit, topic.
-- Correct maps for **GA15VS23A** and **GA15VP13**.
-- Legacy env fallback (works without YAML):
-  - `AC_HOSTS`, `AC_MODELS`, optional `AC_NAMES`
-  - `TIMEOUT`, `VERBOSE`
-- MQTT envs: `MQTT_HOST`/`MQTT_PORT`/`MQTT_USER`/`MQTT_PASSWORD`.
-- Bump: version 0.0.9.
-
-## Quick Start (Legacy Env Mode)
-```
-AC_HOSTS=10.60.23.11,10.60.23.12
-AC_MODELS=GA15VP13,GA15VS23A
-AC_NAMES=eftool-bw-b2-f3-air11,eftool-bw-b2-f3-air12
-MQTT_HOST=broker
-MQTT_PORT=1883
-VERBOSE=true
-TIMEOUT=2.5
-python3 atlas_copco_parser.py
-```
-
-## Config File (optional)
-Place `/config/config.yml` or set `AC_CONFIG=/path/to/config.yml`:
-
-```yaml
-mqtt:
-  host: broker
-  port: 1883
-  user: ""
-  password: ""
-
-base_prefix: atlas_copco
-discovery_prefix: homeassistant
-
-devices:
-  - name: eftool-bw-b2-f3-air11
-    ip: 10.60.23.11
-    model: GA15VP13
-    timeout: 2.5
-    verbose: true
-
-  - name: eftool-bw-b2-f3-air12
-    ip: 10.60.23.12
-    model: GA15VS23A
-    timeout: 2.5
-    verbose: true
-```
+## Options (CSV lists)
+- `ip_list`: Comma-separated IPs (e.g. `"10.0.0.10,10.0.0.11"`)
+- `name_list`: Comma-separated names (same length as `ip_list`)
+- `interval_list`: Comma-separated polling intervals in seconds (defaults to `10` per host)
+- `timeout_list`: Comma-separated HTTP timeouts in seconds (default `5` per host)
+- `verbose_list`: Comma-separated booleans (e.g. `true,false`) for per-host debug logging
+- `question`: Optional controller family key if all devices are identical: `GA15VS23A` or `GA15VP13`
+- `question_list`: Optional per-host question list (overrides `question`)
+- `mqtt_*`: Connection settings for your MQTT broker
+- `discovery_prefix`: Home Assistant discovery prefix (default `homeassistant`)
 
 ## Notes
-- The HTTP endpoints differ across controllers. This script tries a few common paths:
-  `/{question}`, `/q?code={question}`, `/values?obj={question}`.
-- If your controller requires a different path or authentication, adapt `DeviceSession.ask_question` accordingly.
-- Set `ONE_SHOT=true` to run a single poll cycle, else it loops with `POLL_INTERVAL` (seconds).
-
-## License
-MIT
+* This build uses individual pair reads (slower but robust) and will attempt bulk queries if a response format match is detected.
+* Topics look like:
+  - `atlas_copco/<device>/availability`
+  - `atlas_copco/<device>/sensor/<sensor_key>`
+  - Discovery under: `<discovery_prefix>/sensor/atlas_copco_<device>/<sensor_key>/config`
