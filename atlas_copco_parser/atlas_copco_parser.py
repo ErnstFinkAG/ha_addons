@@ -382,9 +382,8 @@ def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, inter
                 log.info("[%s] %s = %s", device_name, key, val)
         # interval pacing
         elapsed = time.time() - started
-        dt = max(0.0, interval - elapsed)
-        time.sleep(dt)
-delay)
+        delay = max(0.0, float(interval) - float(elapsed))
+        time.sleep(delay)
 
 # ---------------- Main ----------------
 def load_options() -> Dict[str, Any]:
