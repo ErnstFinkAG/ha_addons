@@ -16,7 +16,7 @@ import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
 SELF_PATH = __file__
-VERSION = "0.8.1-entityid-fix-2025-09-04"
+VERSION = "0.9.1"
 
 # ------------------------- PowerShell QUESTION (exact) ------------------------
 QUESTION_HEX_GS15VP13 = (
