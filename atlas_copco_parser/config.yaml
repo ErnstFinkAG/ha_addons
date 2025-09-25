@@ -1,5 +1,5 @@
 name: Atlas Copco Parser
-version: "0.9.1"
+version: "0.9.0"
 slug: atlas_copco_parser
 description: "Poll Atlas Copco MK5s Touch controllers (GS15VP13/GS15VS23A) and publish decoded sensors via MQTT Discovery."
 arch:

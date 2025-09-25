@@ -16,7 +16,7 @@ import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
 SELF_PATH = __file__
-VERSION = "0.9.1"
+VERSION = "0.8.1-entityid-fix-2025-09-04"
 
 # ------------------------- PowerShell QUESTION (exact) ------------------------
 QUESTION_HEX_GS15VP13 = (
@@ -52,20 +52,30 @@ def build_keys_from_question(q: str) -> List[str]:
     return ks
 
 def tokenize_answer(answer_clean: str, key_count: int) -> List[Optional[str]]:
+    \"\\"Tokenize a device answer into 32-bit words (8 hex) with 'X' runs meaning a *single* missing token.
+    We consume a *full* run of X/x characters as one placeholder to keep alignment.
+    Any non-hex noise is skipped with resync until we find 8 hex digits or an X-run.
+    \"\\"
     tokens: List[Optional[str]] = []
     i = 0
     n = len(answer_clean)
+    hexset = set("0123456789abcdefABCDEF")
     while len(tokens) < key_count and i < n:
         ch = answer_clean[i]
         if ch in ('X','x'):
+            # consume the entire X-run as ONE missing token
+            j = i + 1
+            while j < n and answer_clean[j] in ('X','x'):
+                j += 1
             tokens.append(None)
-            i += 1
+            i = j
         else:
-            if i + 8 <= n and re.fullmatch(r'[0-9A-Fa-f]{8}', answer_clean[i:i+8]):
+            # try 8 clean hex chars
+            if i + 8 <= n and all(c in hexset for c in answer_clean[i:i+8]):
                 tokens.append(answer_clean[i:i+8].upper())
                 i += 8
             else:
-                # resync
+                # resync: skip until next hex or X
                 i += 1
     # pad if short
     while len(tokens) < key_count:
