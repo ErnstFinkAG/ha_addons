@@ -271,6 +271,7 @@ def publish_discovery(bus: MqttBus, discovery_prefix: str, device_name: str, dev
         bus.pub(topic, json.dumps(cfg), retain=True)
 
 # ---------------- Worker ----------------
+
 def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, interval: int, timeout: int, verbose: bool, discovery_prefix: str):
     sensors = SENSORS_GA15VS23A if device_type == "GA15VS23A" else SENSORS_GA15VP13
     device_slug = slugify(device_name)
@@ -285,13 +286,16 @@ def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, inter
         started = time.time()
         for key, meta in sensors.items():
             val = None
-            b = get_pair_bytes(sess, ip, meta["pair"], timeout=timeout, verbose=verbose)
+            pair = meta["pair"]
+            qstr = pair.replace(".", "")
+            b = get_pair_bytes(sess, ip, pair, timeout=timeout, verbose=verbose)
+            raw_int = None
             if b is not None:
-                raw = parse_value(meta["part"], b)
-                if raw is not None:
+                raw_int = parse_value(meta["part"], b)
+                if raw_int is not None:
                     dec = DECODERS[meta["decode"]]
                     try:
-                        val = dec(raw)
+                        val = dec(raw_int)
                     except Exception as e:
                         if verbose:
                             log.warning("[%s] decode %s failed: %s", device_name, key, e)
@@ -299,13 +303,27 @@ def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, inter
             payload = "null" if val is None else json.dumps(val)
             bus.pub(topic, payload, retain=True)
             if verbose:
-                log.info("[%s] %s = %s", device_name, key, payload)
-
+                unit = meta.get("unit")
+                log.info(
+                    "[%s] model=%s question_var=%s key=%s pair=%s question=%s encoding=%s/%s bytes=%s raw=%s calc=%s -> value=%s%s topic=%s",
+                    device_name,
+                    device_type,
+                    device_type,
+                    key,
+                    pair,
+                    qstr,
+                    meta["part"],
+                    meta["decode"],
+                    None if b is None else b.hex(),
+                    raw_int,
+                    _calc_desc(meta["decode"], raw_int),
+                    payload if payload != "null" else "null",
+                    "" if not unit else f" {unit}",
+                    topic
+                )
         # pacing
         delay = max(0.5, interval - (time.time() - started))
         time.sleep(delay)
-
-# ---------------- Main ----------------
 def load_options() -> Dict[str, Any]:
     # When running as HA add-on, options are provided here:
     if os.path.exists(OPTIONS_PATH):
@@ -378,14 +396,18 @@ def main():
     signal.signal(signal.SIGTERM, handle_sig)
     signal.signal(signal.SIGINT, handle_sig)
 
-    for i, ip in enumerate(ips):
-        name = names[i]
-        device_type = device_types[i] if device_types[i] in ("GA15VS23A", "GA15VP13") else "GA15VS23A"
-        t = threading.Thread(target=poll_device, args=(bus, ip, name, device_type, intervals[i], timeouts[i], verboses[i], discovery_prefix), daemon=True)
-        t.start()
-        threads.append(t)
-        log.info("Started poller for %s (%s)", name, ip)
-
+    log.info("Sequential mode enabled (forced): polling one device at a time.")
+    import time as _t
+    sessions = [requests.Session() for _ in ips]
+    try:
+        while not stop.is_set():
+            for i, ip in enumerate(ips):
+                name = names[i]
+                device_type = device_types[i] if device_types[i] in ("GA15VS23A", "GA15VP13") else "GA15VS23A"
+                poll_once(bus, sessions[i], ip, name, device_type, timeouts[i], verboses[i], discovery_prefix)
+                _t.sleep(max(0.0, intervals[i]))
+    finally:
+        pass
     # Keep main thread alive until stop signal
     try:
         while not stop.is_set():
