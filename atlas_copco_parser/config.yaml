@@ -11,23 +11,23 @@ host_network: true
 homeassistant_api: false
 
 options:
-  ip: "10.60.23.11"
-  name: "compressor_a"
-  type: "gs15vp13"   # one of: gs15vp13, gs15vs23a
+  ip: "10.60.23.11,10.60.23.12"
+  name: "eftool-bw-b2-air1,eftool-bw-b2-air2"
+  type: "gs15vp13,gs15vs23a"   # one of: gs15vp13, gs15vs23a
   interval: 10
   timeout: 5
-  verbose: false
+  verbose: true
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883
-  mqtt_user: ""
-  mqtt_password: ""
+  mqtt_user: "mqtt_user"
+  mqtt_password: "mqtt_password"
   discovery_prefix: "homeassistant"
   scaling_overrides: "{}"
 
 schema:
   ip: str
   name: str
-  type: list(gs15vp13|gs15vs23a)
+  type: str
   interval: int
   timeout: int
   verbose: bool
