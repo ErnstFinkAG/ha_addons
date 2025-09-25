@@ -52,10 +52,9 @@ def build_keys_from_question(q: str) -> List[str]:
     return ks
 
 def tokenize_answer(answer_clean: str, key_count: int) -> List[Optional[str]]:
-    \"\\"Tokenize a device answer into 32-bit words (8 hex) with 'X' runs meaning a *single* missing token.
-    We consume a *full* run of X/x characters as one placeholder to keep alignment.
-    Any non-hex noise is skipped with resync until we find 8 hex digits or an X-run.
-    \"\\"
+    """Tokenize a device answer into 32-bit words (8 hex).
+    X/x runs are consumed as ONE missing token to preserve alignment.
+    """
     tokens: List[Optional[str]] = []
     i = 0
     n = len(answer_clean)
