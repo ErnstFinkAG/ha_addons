@@ -19,3 +19,12 @@ Polls Atlas Copco MK5s Touch controllers over HTTP and publishes sensors to MQTT
   - `atlas_copco/<device>/availability`
   - `atlas_copco/<device>/sensor/<sensor_key>`
   - Discovery under: `<discovery_prefix>/sensor/atlas_copco_<device>/<sensor_key>/config`
+
+
+## Autodetection
+By default the add-on tries to autodetect the controller family per host on startup by probing a couple of key pairs.
+You can disable this by setting `autodetect: false` in the add-on options.
+
+## Logging
+Set the `LOG_LEVEL` environment variable (e.g. `DEBUG`, `INFO`, `WARNING`) to control verbosity. When `verbose_list` includes `true` for a host,
+the add-on logs each sensor value line-by-line for that host.

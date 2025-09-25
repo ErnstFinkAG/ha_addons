@@ -7,7 +7,7 @@ import paho.mqtt.client as mqtt
 OPTIONS_PATH = "/data/options.json"
 VERSION = "0.1.0"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=os.environ.get("LOG_LEVEL","INFO"), format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 log = logging.getLogger("atlas_copco")
 
 def normalize_model(s: str) -> str:
@@ -106,7 +106,7 @@ SENSORS_GA15VP13: Dict[str, Dict[str, Any]] = {
     "vsd_20_40":              {"pair":"3007.06","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 20–40%"},
     "vsd_40_60":              {"pair":"3007.07","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 40–60%"},
     "vsd_60_80":              {"pair":"3007.08","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 60–80%"},
-    "vssd_80_100":            {"pair":"3007.09","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 80–100%"},
+    "vsd_80_100":            {"pair":"3007.09","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 80–100%"},
     "fan_starts":             {"pair":"3007.0B","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Fan Starts"},
     "accumulated_volume":     {"pair":"3007.0C","part":"u32","decode":"_times1000","unit":"m³","device_class":None,"state_class":"total_increasing","name":"Accumulated Volume"},
     "module_hours":           {"pair":"3007.0D","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Module Hours"},
@@ -252,7 +252,7 @@ def publish_discovery(bus: MqttBus, discovery_prefix: str, device_name: str, dev
         bus.pub(topic, json.dumps(cfg), retain=True)
 
 # ---------------- Worker ----------------
-def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, interval: int, timeout: int, verbose: bool, discovery_prefix: str):
+def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, interval: int, timeout: int, verbose: bool, discovery_prefix: str, autodetect: bool):
     sensors = SENSORS_GA15VS23A if device_type == "GA15VS23A" else SENSORS_GA15VP13
     device_slug = slugify(device_name)
     avail = f"atlas_copco/{device_slug}/availability"
@@ -261,6 +261,17 @@ def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, inter
     bus.pub(avail, "online", retain=True)
 
     sess = requests.Session()
+    # Optional model autodetection per host
+    if autodetect:
+        try:
+            detected = try_probe_model(sess, ip, timeout=timeout, verbose=verbose)
+            if detected and detected in ("GA15VS23A","GA15VP13") and detected != device_type:
+                log.info("[%s] autodetected model: %s (was %s)", device_name, detected, device_type)
+                device_type = detected
+                sensors = SENSORS_GA15VS23A if device_type == "GA15VS23A" else SENSORS_GA15VP13
+                publish_discovery(bus, discovery_prefix, device_name, device_type, sensors)
+        except Exception as e:
+            log.warning("[%s] autodetect failed: %s", device_name, e)
 
     while True:
         started = time.time()
@@ -362,7 +373,7 @@ def main():
     for i, ip in enumerate(ips):
         name = names[i]
         device_type = device_types[i] if device_types[i] in ("GA15VS23A", "GA15VP13") else "GA15VS23A"
-        t = threading.Thread(target=poll_device, args=(bus, ip, name, device_type, intervals[i], timeouts[i], verboses[i], discovery_prefix), daemon=True)
+        t = threading.Thread(target=poll_device, args=(bus, ip, name, device_type, intervals[i], timeouts[i], verboses[i], discovery_prefix, auto), daemon=True)
         t.start()
         threads.append(t)
         log.info("Started poller for %s (%s)", name, ip)
