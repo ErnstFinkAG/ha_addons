@@ -382,7 +382,6 @@ def main():
 if __name__ == "__main__":
     main()
 
-
 def poll_once(bus: MqttBus, sess: requests.Session, ip: str, device_name: str, device_type: str, timeout: int, verbose: bool, discovery_prefix: str):
     sensors = SENSORS_GA15VS23A if device_type == "GA15VS23A" else SENSORS_GA15VP13
     device_slug = slugify(device_name)
@@ -390,34 +389,37 @@ def poll_once(bus: MqttBus, sess: requests.Session, ip: str, device_name: str, d
     avail = f"atlas_copco/{device_slug}/availability"
 
     for key, meta in sensors.items():
-            val = None
-            pair = meta["pair"]
-            qstr = pair.replace(".", "")
-            b = get_pair_bytes(sess, ip, pair, timeout=timeout, verbose=verbose)
-            raw_int = None
-            if b is not None:
-                raw_int = parse_value(meta["part"], b)
-                if raw_int is not None:
-                    dec = DECODERS[meta["decode"]]
-                    try:
-                        val = dec(raw_int)
-                    except Exception as e:
-                        if verbose:
-                            log.warning("[%s] decode %s failed: %s", device_name, key, e)
-            topic = f"{base}/{slugify(key)}"
-            payload = "null" if val is None else json.dumps(val)
-            bus.pub(topic, payload, retain=True)
-            if verbose:
-                unit = meta.get("unit")
-                log.info(
-                    "[%s] key=%s pair=%s question=%s part=%s bytes=%s raw=%s decode=%s -> value=%s%s topic=%s",
-                    device_name, key, pair, qstr, meta["part"],
-                    None if b is None else b.hex(), raw_int, meta["decode"],
-                    payload if payload != "null" else "null",
-                    "" if not unit else f" {unit}", topic
-                )
-                topic = f"{base}/{slugify(key)}"
+        val = None
+        pair = meta["pair"]
+        qstr = pair.replace(".", "")
+        b = get_pair_bytes(sess, ip, pair, timeout=timeout, verbose=verbose)
+        raw_int = None
+        if b is not None:
+            raw_int = parse_value(meta["part"], b)
+            if raw_int is not None:
+                dec = DECODERS[meta["decode"]]
+                try:
+                    val = dec(raw_int)
+                except Exception as e:
+                    if verbose:
+                        log.warning("[%s] decode %s failed: %s", device_name, key, e)
+        topic = f"{base}/{slugify(key)}"
         payload = "null" if val is None else json.dumps(val)
         bus.pub(topic, payload, retain=True)
         if verbose:
-            log.info("[%s] %s = %s", device_name, key, payload)
+            unit = meta.get("unit")
+            log.info(
+                "[%s] model=%s key=%s pair=%s question=%s part=%s bytes=%s raw=%s decode=%s -> value=%s%s topic=%s",
+                device_name,
+                device_type,
+                key,
+                pair,
+                qstr,
+                meta["part"],
+                None if b is None else b.hex(),
+                raw_int,
+                meta["decode"],
+                payload if payload != "null" else "null",
+                "" if not unit else f" {unit}",
+                topic
+            )
