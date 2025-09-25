@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Atlas Copco Parser
-# VERSION: 0.0.1
+# VERSION: 0.0.2
 #
 # This version mirrors the PowerShell script:
 #   - One single QUESTION hex string (same order and content)
