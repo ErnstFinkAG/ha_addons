@@ -346,8 +346,8 @@ def main():
     mqtt_password = opts.get("mqtt_password", "")
     discovery_prefix = opts.get("discovery_prefix", "homeassistant")
 
-        auto = bool(str(opts.get("autodetect", "true")).lower() in ("1","true","yes","on"))
-        bus = MqttBus(mqtt_host, mqtt_port, mqtt_user, mqtt_password, client_id=f"atlas_copco_{int(time.time())}")
+    auto = bool(str(opts.get("autodetect", "true")).lower() in ("1","true","yes","on"))
+    bus = MqttBus(mqtt_host, mqtt_port, mqtt_user, mqtt_password, client_id=f"atlas_copco_{int(time.time())}")
 
     threads = []
     stop = threading.Event()
