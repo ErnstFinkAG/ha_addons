@@ -350,16 +350,61 @@ def parse_csv_list(s: str, fallback: Any, conv=lambda x: x):
         return fallback
     return [conv(x.strip()) for x in s.split(",") if x.strip() != ""]
 
+def poll_once(bus: MqttBus, sess, ip: str, device_name: str, device_type: str, timeout: int, verbose: bool, discovery_prefix: str):
+    sensors = SENSORS_GA15VS23A if device_type == "GA15VS23A" else SENSORS_GA15VP13
+    device_slug = slugify(device_name)
+    base = f"atlas_copco/{device_slug}/sensor"
+    avail = f"atlas_copco/{device_slug}/availability"
+
+    for key, meta in sensors.items():
+        val = None
+        pair = meta["pair"]
+        qstr = pair.replace(".", "")
+        b = get_pair_bytes(sess, ip, pair, timeout=timeout, verbose=verbose)
+        raw_int = None
+        if b is not None:
+            raw_int = parse_value(meta["part"], b)
+            if raw_int is not None:
+                dec = DECODERS[meta["decode"]]
+                try:
+                    val = dec(raw_int)
+                except Exception as e:
+                    if verbose:
+                        log.warning("[%s] decode %s failed: %s", device_name, key, e)
+        topic = f"{base}/{slugify(key)}"
+        payload = "null" if val is None else json.dumps(val)
+        bus.pub(topic, payload, retain=True)
+        if verbose:
+            unit = meta.get("unit")
+            log.info(
+                "[%s] model=%s question_var=%s key=%s pair=%s question=%s encoding=%s/%s bytes=%s raw=%s calc=%s -> value=%s%s topic=%s",
+                device_name,
+                device_type,
+                device_type,
+                key,
+                pair,
+                qstr,
+                meta["part"],
+                meta["decode"],
+                None if b is None else b.hex(),
+                raw_int,
+                _calc_desc(meta["decode"], raw_int),
+                payload if payload != "null" else "null",
+                "" if not unit else f" {unit}",
+                topic
+            )
+
 def main():
+    print("[atlas_copco_parser] starting...")
     opts = load_options()
 
     ips = parse_csv_list(opts.get("ip_list", ""), [], str)
     names = parse_csv_list(opts.get("name_list", ""), [], str)
     intervals = parse_csv_list(opts.get("interval_list", ""), [10]*len(ips), int)
     timeouts = parse_csv_list(opts.get("timeout_list", ""), [5]*len(ips), int)
-    verboses = parse_csv_list(opts.get("verbose_list", ""), [False]*len(ips), lambda x: x.lower() in ("1","true","yes","on"))
+    verboses = parse_csv_list(opts.get("verbose_list", ""), [False]*len(ips), lambda x: str(x).lower() in ("1","true","yes","on"))
     qlist = parse_csv_list(opts.get("question_list", ""), [], str)
-    default_q = opts.get("question", "GA15VS23A").strip() or "GA15VS23A"
+    default_q = (opts.get("question", "GA15VS23A") or "GA15VS23A").strip()
 
     if len(names) != len(ips):
         names = [f"atlas_{i+1}" for i in range(len(ips))]
@@ -386,8 +431,27 @@ def main():
     auto = bool(str(opts.get("autodetect", "true")).lower() in ("1","true","yes","on"))
     bus = MqttBus(mqtt_host, mqtt_port, mqtt_user, mqtt_password, client_id=f"atlas_copco_{int(time.time())}")
 
-    threads = []
     stop = threading.Event()
+
+    def handle_sig(signum, frame):
+        log.info("signal %s received, exiting...", signum)
+        stop.set()
+
+    signal.signal(signal.SIGTERM, handle_sig)
+    signal.signal(signal.SIGINT, handle_sig)
+
+    log.info("Sequential mode enabled (forced): polling one device at a time.")
+    sessions = [requests.Session() for _ in ips]
+
+    try:
+        while not stop.is_set():
+            for i, ip in enumerate(ips):
+                name = names[i]
+                dtype = device_types[i] if device_types[i] in ("GA15VS23A", "GA15VP13") else "GA15VS23A"
+                poll_once(bus, sessions[i], ip, name, dtype, timeouts[i], verboses[i], discovery_prefix)
+                time.sleep(max(0.0, intervals[i]))
+    finally:
+        pass
 
     def handle_sig(signum, frame):
         log.info("signal %s received, exiting...", signum)
@@ -420,50 +484,5 @@ def main():
             bus.pub(avail, "offline", retain=True)
         log.info("shutdown complete.")
 
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-def poll_once(bus: MqttBus, sess: requests.Session, ip: str, device_name: str, device_type: str, timeout: int, verbose: bool, discovery_prefix: str):
-    sensors = SENSORS_GA15VS23A if device_type == "GA15VS23A" else SENSORS_GA15VP13
-    device_slug = slugify(device_name)
-    base = f"atlas_copco/{device_slug}/sensor"
-    avail = f"atlas_copco/{device_slug}/availability"
-
-    for key, meta in sensors.items():
-        val = None
-        pair = meta["pair"]
-        qstr = pair.replace(".", "")
-        b = get_pair_bytes(sess, ip, pair, timeout=timeout, verbose=verbose)
-        raw_int = None
-        if b is not None:
-            raw_int = parse_value(meta["part"], b)
-            if raw_int is not None:
-                dec = DECODERS[meta["decode"]]
-                try:
-                    val = dec(raw_int)
-                except Exception as e:
-                    if verbose:
-                        log.warning("[%s] decode %s failed: %s", device_name, key, e)
-        topic = f"{base}/{slugify(key)}"
-        payload = "null" if val is None else json.dumps(val)
-        bus.pub(topic, payload, retain=True)
-        if verbose:
-            unit = meta.get("unit")
-            log.info(
-                        "[%s] model=%s question_var=%s key=%s pair=%s question=%s encoding=%s/%s bytes=%s raw=%s calc=%s -> value=%s%s topic=%s",
-                        device_name,
-                        device_type,
-                        device_type,
-                        key,
-                        pair,
-                        qstr,
-                        meta["part"],
-                        meta["decode"],
-                        None if b is None else b.hex(),
-                        raw_int,
-                        _calc_desc(meta["decode"], raw_int),
-                        payload if payload != "null" else "null",
-                        "" if not unit else f" {unit}",
-                        topic
-                    )
