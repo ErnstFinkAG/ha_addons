@@ -10,6 +10,32 @@ VERSION = "0.1.0"
 logging.basicConfig(level=os.environ.get("LOG_LEVEL","INFO"), format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 log = logging.getLogger("atlas_copco")
 
+def normalize_vsd_buckets(values: dict, keys: list[str], total_seconds: float | None = None) -> dict:
+    # Take numeric values, compute percentages adding to 100 with rounding fix on the last bucket
+    nums = []
+    for k in keys:
+        v = values.get(k)
+        try:
+            nums.append(float(v) if v is not None else None)
+        except Exception:
+            nums.append(None)
+    if any(v is None for v in nums):
+        return {k: values.get(k) for k in keys}
+    # If a real total_seconds is provided, use it (for controllers reporting VSD buckets in seconds)
+    if total_seconds is not None and total_seconds > 0:
+        perc = [round(v * 100.0 / total_seconds, 2) for v in nums]
+        if len(perc) >= 2:
+            perc[-1] = round(100.0 - sum(perc[:-1]), 2)
+        return {k: perc[i] for i, k in enumerate(keys)}
+    total = sum(nums)
+    if not total or total <= 0:
+        return {k: 0.0 for k in keys}
+    perc = [round(v * 100.0 / total, 2) for v in nums]
+    # Adjust last bucket to ensure exact 100.0
+    if len(perc) >= 2:
+        perc[-1] = round(100.0 - sum(perc[:-1]), 2)
+    return {k: perc[i] for i, k in enumerate(keys)}
+
 def normalize_model(s: str) -> str:
     s = (s or "").strip().upper()
     aliases = {
@@ -119,12 +145,12 @@ SENSORS_GA15VS23A: Dict[str, Dict[str, Any]] = {
     "fan_rpm_requested":      {"pair":"3022.01","part":"lo","decode":"_id","unit":"rpm","device_class":None,"state_class":"measurement","name":"Fan Motor Requested RPM"},
     "fan_rpm_actual":         {"pair":"3022.01","part":"hi","decode":"_id","unit":"rpm","device_class":None,"state_class":"measurement","name":"Fan Motor Actual RPM"},
     "fan_motor_amperage":     {"pair":"3022.0A","part":"hi","decode":"_id","unit":"A","device_class":"current","state_class":"measurement","name":"Fan Motor Amperage"},
-    "service_a_1":            {"pair":"3113.50","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service A 1"},
-    "service_a_2":            {"pair":"3113.51","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service A 2"},
-    "service_b_1":            {"pair":"3113.52","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 1"},
-    "service_b_2":            {"pair":"3113.53","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 2"},
-    "service_d_1":            {"pair":"3113.54","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service D 1"},
-    "service_d_2":            {"pair":"3113.55","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service D 2"},
+    "service_a_1":            {"pair":"3113.50","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service A 1","seconds_to_hours": true},
+    "service_a_2":            {"pair":"3113.51","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service A 2","seconds_to_hours": true},
+    "service_b_1":            {"pair":"3113.52","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 1","seconds_to_hours": true},
+    "service_b_2":            {"pair":"3113.53","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 2","seconds_to_hours": true},
+    "service_d_1":            {"pair":"3113.54","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service D 1","seconds_to_hours": true},
+    "service_d_2":            {"pair":"3113.55","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service D 2","seconds_to_hours": true},
 }
 
 SENSORS_GA15VP13: Dict[str, Dict[str, Any]] = {
@@ -156,10 +182,10 @@ SENSORS_GA15VP13: Dict[str, Dict[str, Any]] = {
     "rpm_actual":             {"pair":"3021.01","part":"hi","decode":"_id","unit":"rpm","device_class":None,"state_class":"measurement","name":"RPM Actual"},
     "motor_amperage":         {"pair":"3021.05","part":"hi","decode":"_id","unit":"A","device_class":"current","state_class":"measurement","name":"Motor Amperage"},
     "flow":                   {"pair":"3021.0A","part":"u32","decode":"_id","unit":"%","device_class":None,"state_class":"measurement","name":"Flow"},
-    "service_a_1":            {"pair":"3113.50","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service A 1"},
-    "service_a_2":            {"pair":"3113.51","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service A 2"},
-    "service_b_1":            {"pair":"3113.52","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 1"},
-    "service_b_2":            {"pair":"3113.53","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 2"},
+    "service_a_1":            {"pair":"3113.50","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service A 1","seconds_to_hours": true},
+    "service_a_2":            {"pair":"3113.51","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service A 2","seconds_to_hours": true},
+    "service_b_1":            {"pair":"3113.52","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 1","seconds_to_hours": true},
+    "service_b_2":            {"pair":"3113.53","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Service B 2","seconds_to_hours": true},
 }
 
 # ---------------- Decoders ----------------
@@ -309,27 +335,56 @@ def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, inter
 
     while True:
         started = time.time()
+        values = {}
+        # first pass: read raw values
         for key, meta in sensors.items():
             val = None
             b = get_pair_bytes(sess, ip, meta["pair"], timeout=timeout, verbose=verbose)
             if b is not None:
                 raw = parse_value(meta["part"], b)
                 if raw is not None:
-                    dec = DECODERS[meta["decode"]]
+                    # convert seconds->hours if flagged
+                    if meta.get("seconds_to_hours"):
+                        try:
+                            val = float(raw) / 3600.0
+                        except Exception:
+                            val = None
+                    else:
+                        val = raw
+            values[key] = val
+        # normalize VSD buckets to sum to 100%
+        vsd_keys = [k for k in values.keys() if k.startswith("vsd_")]
+        if len(vsd_keys) == 5 and all(values.get(k) is not None for k in vsd_keys):
+            # Heuristic: if any bucket > 100, the buckets are seconds, not percentages
+            buckets = [float(values[k]) for k in vsd_keys]
+            buckets_are_seconds = any(v > 100.0 for v in buckets)
+            total_seconds = None
+            if buckets_are_seconds:
+                # Prefer using running_hours (seconds) as the denominator if available
+                rh = values.get("running_hours")
+                if rh is not None:
                     try:
-                        val = dec(raw)
-                    except Exception as e:
-                        if verbose:
-                            log.warning("[%s] decode %s failed: %s", device_name, key, e)
-            topic = f"atlas_copco/{device_slug}/sensor/{slugify(key)}"
-            payload = "null" if val is None else json.dumps(val)
+                        total_seconds = float(rh) * 3600.0
+                    except Exception:
+                        total_seconds = None
+                # Fallback to sum of buckets
+                if not total_seconds or total_seconds <= 0:
+                    total_seconds = sum(buckets)
+            normed = normalize_vsd_buckets(values, vsd_keys, total_seconds=total_seconds)
+            values.update(normed)
+        # second pass: publish
+        for key, meta in sensors.items():
+            val = values.get(key)
+            topic = f"atlas_copco/{device_slug}/{key}"
+            payload = json.dumps(val) if val is not None else "null"
             bus.pub(topic, payload, retain=True)
             if verbose:
-                log.info("[%s] %s = %s", device_name, key, payload)
-
-        # pacing
-        delay = max(0.5, interval - (time.time() - started))
-        time.sleep(delay)
+                log.info("[%s] %s = %s", device_name, key, val)
+        # interval pacing
+        elapsed = time.time() - started
+        dt = max(0.0, interval - elapsed)
+        time.sleep(dt)
+delay)
 
 # ---------------- Main ----------------
 def load_options() -> Dict[str, Any]:
