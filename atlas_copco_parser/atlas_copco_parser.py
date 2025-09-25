@@ -415,7 +415,8 @@ def poll_once(bus: MqttBus, sess: requests.Session, ip: str, device_name: str, d
                     None if b is None else b.hex(), raw_int, meta["decode"],
                     payload if payload != "null" else "null",
                     "" if not unit else f" {unit}", topic
-                )        topic = f"{base}/{slugify(key)}"
+                )
+                topic = f"{base}/{slugify(key)}"
         payload = "null" if val is None else json.dumps(val)
         bus.pub(topic, payload, retain=True)
         if verbose:
