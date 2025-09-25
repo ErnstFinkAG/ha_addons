@@ -1,6 +1,62 @@
+from typing import Dict, Any
+
+
+ALL_SENSOR_GROUPS: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+GA15VS23A: Dict[str, Dict[str, Any]] = {
+    'machine_status': {'pair': '3001.08', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'measurement', 'name': 'Machine Status'},
+    'controller_temperature': {'pair': '3002.01', 'part': 'hi', 'decode': '_div10', 'unit': '°C', 'device_class': 'temperature', 'state_class': 'measurement', 'name': 'Controller Temperature'},
+    'compressor_outlet': {'pair': '3002.24', 'part': 'hi', 'decode': '_div1000', 'unit': 'bar', 'device_class': 'pressure', 'state_class': 'measurement', 'name': 'Compressor Outlet'},
+    'ambient_air': {'pair': '3002.26', 'part': 'hi', 'decode': '_div10', 'unit': '°C', 'device_class': 'temperature', 'state_class': 'measurement', 'name': 'Ambient Air'},
+    'relative_humidity': {'pair': '3002.27', 'part': 'hi', 'decode': '_id', 'unit': '%', 'device_class': 'humidity', 'state_class': 'measurement', 'name': 'Relative Humidity'},
+    'element_outlet': {'pair': '3002.2A', 'part': 'hi', 'decode': '_div10', 'unit': '°C', 'device_class': 'temperature', 'state_class': 'measurement', 'name': 'Element Outlet'},
+    'aftercooler_pcb_temp': {'pair': '3002.66', 'part': 'hi', 'decode': '_div10', 'unit': '°C', 'device_class': 'temperature', 'state_class': 'measurement', 'name': 'Aftercooler Drain PCB Temperature'},
+    'running_hours': {'pair': '3007.01', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Running Hours'},
+    'motor_starts': {'pair': '3007.03', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Motor Starts'},
+    'load_relay': {'pair': '3007.04', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Load Relay'},
+    'vsd_1_20': {'pair': '3007.05', 'part': 'u32', 'decode': '_percent_from_bucket', 'unit': '%', 'device_class': None, 'state_class': 'measurement', 'name': 'VSD 1–20%'},
+    'vsd_20_40': {'pair': '3007.06', 'part': 'u32', 'decode': '_percent_from_bucket', 'unit': '%', 'device_class': None, 'state_class': 'measurement', 'name': 'VSD 20–40%'},
+    'vsd_40_60': {'pair': '3007.07', 'part': 'u32', 'decode': '_percent_from_bucket', 'unit': '%', 'device_class': None, 'state_class': 'measurement', 'name': 'VSD 40–60%'},
+    'vsd_60_80': {'pair': '3007.08', 'part': 'u32', 'decode': '_percent_from_bucket', 'unit': '%', 'device_class': None, 'state_class': 'measurement', 'name': 'VSD 60–80%'},
+    'vsd_80_100': {'pair': '3007.09', 'part': 'u32', 'decode': '_percent_from_bucket', 'unit': '%', 'device_class': None, 'state_class': 'measurement', 'name': 'VSD 80–100%'},
+    'fan_starts': {'pair': '3007.0B', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Fan Starts'},
+    'accumulated_volume': {'pair': '3007.0C', 'part': 'u32', 'decode': '_times1000', 'unit': 'm³', 'device_class': None, 'state_class': 'total_increasing', 'name': 'Accumulated Volume'},
+    'module_hours': {'pair': '3007.0D', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Module Hours'},
+    'emergency_stops': {'pair': '3007.0E', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Emergency Stops'},
+    'direct_stops': {'pair': '3007.0F', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Direct Stops'},
+    'recirculation_starts': {'pair': '3007.17', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Recirculation Starts'},
+    'recirculation_failures': {'pair': '3007.18', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Recirculation Failures'},
+    'low_load_hours': {'pair': '3007.1B', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Low Load Hours'},
+    'available_hours': {'pair': '3007.25', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Available Hours'},
+    'unavailable_hours': {'pair': '3007.26', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Unavailable Hours'},
+    'emergency_stop_hours': {'pair': '3007.27', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Emergency Stop Hours'},
+    'display_hours': {'pair': '3007.43', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Display Hours'},
+    'boostflow_hours': {'pair': '3007.4C', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Boostflow Hours'},
+    'boostflow_activations': {'pair': '3007.4D', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Boostflow Activations'},
+    'emergency_stops_running': {'pair': '3007.54', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Emergency Stops During Running'},
+    'drain1_op_time': {'pair': '3007.55', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Drain 1 Operation Time'},
+    'drain1_switching': {'pair': '3007.56', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Drain 1 Switching Actions'},
+    'drain1_manual': {'pair': '3007.57', 'part': 'u32', 'decode': '_id', 'unit': None, 'device_class': None, 'state_class': 'total_increasing', 'name': 'Drain 1 Manual Drainings'},
+    'motor_rpm_requested': {'pair': '3021.01', 'part': 'lo', 'decode': '_id', 'unit': 'rpm', 'device_class': None, 'state_class': 'measurement', 'name': 'Motor Requested RPM'},
+    'motor_rpm_actual': {'pair': '3021.01', 'part': 'hi', 'decode': '_id', 'unit': 'rpm', 'device_class': None, 'state_class': 'measurement', 'name': 'Motor Actual RPM'},
+    'flow': {'pair': '3021.05', 'part': 'u32', 'decode': '_id', 'unit': '%', 'device_class': None, 'state_class': 'measurement', 'name': 'Flow'},
+    'motor_amperage': {'pair': '3021.0A', 'part': 'hi', 'decode': '_id', 'unit': 'A', 'device_class': 'current', 'state_class': 'measurement', 'name': 'Motor Amperage'},
+    'fan_rpm_requested': {'pair': '3022.01', 'part': 'lo', 'decode': '_id', 'unit': 'rpm', 'device_class': None, 'state_class': 'measurement', 'name': 'Fan Motor Requested RPM'},
+    'fan_rpm_actual': {'pair': '3022.01', 'part': 'hi', 'decode': '_id', 'unit': 'rpm', 'device_class': None, 'state_class': 'measurement', 'name': 'Fan Motor Actual RPM'},
+    'fan_motor_amperage': {'pair': '3022.0A', 'part': 'hi', 'decode': '_id', 'unit': 'A', 'device_class': 'current', 'state_class': 'measurement', 'name': 'Fan Motor Amperage'},
+    'service_a_1': {'pair': '3113.50', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Service A 1'},
+    'service_a_2': {'pair': '3113.51', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Service A 2'},
+    'service_b_1': {'pair': '3113.52', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Service B 1'},
+    'service_b_2': {'pair': '3113.53', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Service B 2'},
+    'service_d_1': {'pair': '3113.54', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Service D 1'},
+    'service_d_2': {'pair': '3113.55', 'part': 'u32', 'decode': '_hours_from_seconds_u32', 'unit': 'h', 'device_class': 'duration', 'state_class': 'total_increasing', 'name': 'Service D 2'},
+}
+
+ALL_SENSOR_GROUPS['GA15VS23A'] = GA15VS23A
+
 #!/usr/bin/env python3
-# Atlas Copco Parser
-# VERSION: 0.0.2
+# MK5s Client — Home Assistant add-on
+# VERSION: 0.8.1-entityid-fix-2025-09-04
 #
 # This version mirrors the PowerShell script:
 #   - One single QUESTION hex string (same order and content)
@@ -15,12 +71,14 @@ from typing import Dict, Any
 ALL_SENSOR_GROUPS: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
 GA15VS23A: Dict[str, Dict[str, Any]] = {
-"machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"}
+"machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"
+}
 
 ALL_SENSOR_GROUPS["GA15VS23A"] = GA15VS23A
 
 GA15VP13: Dict[str, Dict[str, Any]] = {
-"machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"}
+"machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"
+}
 
 ALL_SENSOR_GROUPS["GA15VP13"] = GA15VP13
 
