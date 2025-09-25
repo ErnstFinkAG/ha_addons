@@ -420,10 +420,9 @@ def main():
             bus.pub(avail, "offline", retain=True)
         log.info("shutdown complete.")
 
-
-
 if __name__ == "__main__":
     main()
+
 def poll_once(bus: MqttBus, sess: requests.Session, ip: str, device_name: str, device_type: str, timeout: int, verbose: bool, discovery_prefix: str):
     sensors = SENSORS_GA15VS23A if device_type == "GA15VS23A" else SENSORS_GA15VP13
     device_slug = slugify(device_name)
