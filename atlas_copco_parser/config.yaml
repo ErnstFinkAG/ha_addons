@@ -1,5 +1,5 @@
 name: MK5S Client
-version: "0.7.7"
+version: "0.0.1"
 slug: mk5s_client
 description: "Poll Atlas Copco MK5s Touch controllers and publish MQTT sensors (pressure, motor starts, load cycles). Supports multiple hosts via CSV config."
 arch:

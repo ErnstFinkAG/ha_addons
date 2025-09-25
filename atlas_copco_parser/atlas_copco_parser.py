@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # MK5s Client — Home Assistant add-on
-# VERSION: 0.8.1-entityid-fix-2025-09-04
+# VERSION: 0.0.1
 #
 # This version mirrors the PowerShell script:
 #   - One single QUESTION hex string (same order and content)
