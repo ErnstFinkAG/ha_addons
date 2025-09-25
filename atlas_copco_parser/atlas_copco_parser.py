@@ -5,7 +5,7 @@ import requests
 import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
-VERSION = "0.0.8"
+VERSION = "0.1.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("atlas_copco")
@@ -346,8 +346,8 @@ def main():
     mqtt_password = opts.get("mqtt_password", "")
     discovery_prefix = opts.get("discovery_prefix", "homeassistant")
 
-    auto = bool(str(opts.get("autodetect", "true")).lower() in ("1","true","yes","on"))
-    bus = MqttBus(mqtt_host, mqtt_port, mqtt_user, mqtt_password, client_id=f"atlas_copco_{int(time.time())}")
+        auto = bool(str(opts.get("autodetect", "true")).lower() in ("1","true","yes","on"))
+        bus = MqttBus(mqtt_host, mqtt_port, mqtt_user, mqtt_password, client_id=f"atlas_copco_{int(time.time())}")
 
     threads = []
     stop = threading.Event()
