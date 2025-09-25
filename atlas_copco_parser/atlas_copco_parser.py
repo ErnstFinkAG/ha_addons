@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# MK5s Client — Home Assistant add-on
+# Atlas Copco Parser
 # VERSION: 0.0.1
 #
 # This version mirrors the PowerShell script:
