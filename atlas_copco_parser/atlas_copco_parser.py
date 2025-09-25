@@ -22,19 +22,53 @@ def normalize_model(s: str) -> str:
     }
     return aliases.get(s, s)
 
+
 def try_probe_model(sess: requests.Session, ip: str, timeout: int, verbose: bool=False) -> str:
+    """
+    Probe both candidate pairs and choose a model using plausibility and feature presence.
+    - VS reads controller temp from 3002.01 (hi, dec1)
+    - VP reads controller temp from 3002.08 (hi, dec1)
+    Heuristic:
+      1) If only one returns bytes, pick that model.
+      2) If both return bytes, decode both and prefer the value in [5, 65] °C.
+      3) If both plausible or both implausible, check a VS-only-ish pair (3002.66 Aftercooler PCB temp):
+         - present => lean VS; absent while 3002.08 present => lean VP.
+      4) Fallback to VP when 3002.01 decodes < 5°C and 3002.08 decodes >= 5°C.
+      5) Final fallback to VS.
+    """
+    def decode_hi_dec1(b: bytes) -> Optional[float]:
+        if not b or len(b) < 2:
+            return None
+        # high 16-bit signed? historically seems positive; treat as uint16
+        v = (b[0] << 8) | b[1]
+        return v / 10.0
     b_vs = get_pair_bytes(sess, ip, "3002.01", timeout=timeout, verbose=verbose) or b""
     b_vp = get_pair_bytes(sess, ip, "3002.08", timeout=timeout, verbose=verbose) or b""
     if b_vs and not b_vp:
         return "GA15VS23A"
     if b_vp and not b_vs:
         return "GA15VP13"
-    if len(b_vs) >= len(b_vp) and b_vs:
+    # both present or both empty
+    val_vs = decode_hi_dec1(b_vs)
+    val_vp = decode_hi_dec1(b_vp)
+    def plausible(t):
+        return t is not None and 5.0 <= t <= 65.0
+    if plausible(val_vp) and not plausible(val_vs):
+        return "GA15VP13"
+    if plausible(val_vs) and not plausible(val_vp):
         return "GA15VS23A"
+    # discriminator: VS has 3002.66 (aftercooler pcb temp) more commonly available
+    b_vs_feature = get_pair_bytes(sess, ip, "3002.66", timeout=timeout, verbose=verbose) or b""
+    if b_vs_feature and not (not b_vp):
+        # if vs feature present and vp also present, still prefer VS
+        return "GA15VS23A"
+    # Additional rule: if VS decodes <5°C and VP >=5°C -> VP
+    if (val_vs is not None and val_vs < 5.0) and (val_vp is not None and val_vp >= 5.0):
+        return "GA15VP13"
+    # last tie-breaker: prefer VP when both present to avoid the 2.0°C mis-detection
     if b_vp:
         return "GA15VP13"
     return "GA15VS23A"
-
 # ---------------- Controller Question strings (when bulk reads are supported) ----------------
 QUESTION_GA15VS23A = (
     "30020130022430022630022730022a30026630032130032230032e30032f30033030070130070330070430070530070630070730070830070930070b30070c30070d30070e30070f30071730071830071b30072530072630072730074330074c30074d30075430075530075630075730210130210530210a30220130220a30051f30052030052130052730052830052930052a300e03300e04300e05300e2a300ef3310e23310e27310e2b310e3b31130131130331130431130531130731130831130931130a31130b31130c31130d31130e31130f31131031131131131231131331131431131531131631131731131831131931131a31131b31131c31131d31131e31131f31132031132131132231132331132431132531132631132731132831132931132a31132b31132c31132d31132e31132f31133031133131133231133331133431133531133631133731133831133931133a31133b31133c31133d31133e31133f31134031134131134231134331134431134531134631134731134831134931134a31134b31134c31134d31134e31134f31135031135131135231135331135431135531135631135731135831135931135a31135b31135c31135d31135e31135f31136031136131136231136331136431136531136631136731140131140231140331140431140531140631140731140831140931140a31140b31140c31140d31140e31140f311410311411311412300901300906300911300907300912300909300914300108"
