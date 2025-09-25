@@ -1,36 +1,30 @@
-name: Atlas Copco Parser
-version: "0.9.0"
-slug: atlas_copco_parser
-description: "Poll Atlas Copco MK5s Touch controllers (GS15VP13/GS15VS23A) and publish decoded sensors via MQTT Discovery."
+name: Atlas Copco MK5s Client
+version: "1.0.0"
+slug: atlas_copco_mk5s
+description: "Poll Atlas Copco MK5s controllers and publish decoded sensors via MQTT Discovery."
 arch:
   - amd64
   - aarch64
 startup: services
-init: false
 host_network: true
-homeassistant_api: false
-
 options:
-  ip: "10.60.23.11,10.60.23.12"
-  name: "eftool-bw-b2-air1,eftool-bw-b2-air2"
-  type: "gs15vp13,gs15vs23a"   # one of: gs15vp13, gs15vs23a
-  interval: 10
-  timeout: 5
-  verbose: true
+  ip_list: "10.60.23.11,10.60.23.12"
+  name_list: "air1,air2"
+  interval_list: "10"
+  timeout_list: "5"
+  verbose_list: "true"
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883
   mqtt_user: "mqtt_user"
   mqtt_password: "mqtt_password"
   discovery_prefix: "homeassistant"
   scaling_overrides: "{}"
-
 schema:
-  ip: str
-  name: str
-  type: str
-  interval: int
-  timeout: int
-  verbose: bool
+  ip_list: str
+  name_list: str
+  interval_list: str
+  timeout_list: str
+  verbose_list: str
   mqtt_host: str
   mqtt_port: int
   mqtt_user: str

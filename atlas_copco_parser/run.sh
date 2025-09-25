@@ -1,3 +1,3 @@
 #!/bin/bash
-echo "[INFO] Starting Atlas Copco Parser..."
-exec python /app/main.py
+echo "[INFO] Starting MK5s Home Assistant add-on..."
+exec python3 /app/mk5s_client.py
