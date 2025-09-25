@@ -1,5 +1,5 @@
 name: Atlas Copco Parser
-version: "0.0.3"
+version: "0.0.4"
 slug: atlas_copco_parser
 description: "Poll Atlas Copco MK5s Touch controllers and publish MQTT sensors. Supports multiple hosts via CSV config."
 arch:
@@ -27,8 +27,7 @@ schema:
   interval_list: str
   timeout_list: str
   verbose_list: str
-  question: str
-  question_list: str?
+  type: str
   mqtt_host: str
   mqtt_port: int
   mqtt_user: str
