@@ -10,6 +10,25 @@ VERSION = "0.1.0"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("atlas_copco")
 
+def _calc_desc(decoder_name: str, raw_val):
+    try:
+        name = str(decoder_name)
+    except Exception:
+        name = str(decoder_name)
+    if name in ("_div10", "div10"):
+        return "value = raw/10.0"
+    if name in ("_div100", "div100"):
+        return "value = raw/100.0"
+    if name in ("_div1000", "div1000"):
+        return "value = raw/1000.0"
+    if name in ("_hours_from_seconds_u32", "hours_from_seconds_u32"):
+        return "value = raw/3600.0"
+    if name in ("_percent_from_bucket", "percent_from_bucket"):
+        return "value = percent_from_bucket(raw)"
+    if name in ("_identity", "identity"):
+        return "value = raw"
+    return f"value = {name}(raw)"
+
 def normalize_model(s: str) -> str:
     s = (s or "").strip().upper()
     aliases = {
@@ -409,17 +428,19 @@ def poll_once(bus: MqttBus, sess: requests.Session, ip: str, device_name: str, d
         if verbose:
             unit = meta.get("unit")
             log.info(
-                "[%s] model=%s key=%s pair=%s question=%s part=%s bytes=%s raw=%s decode=%s -> value=%s%s topic=%s",
-                device_name,
-                device_type,
-                key,
-                pair,
-                qstr,
-                meta["part"],
-                None if b is None else b.hex(),
-                raw_int,
-                meta["decode"],
-                payload if payload != "null" else "null",
-                "" if not unit else f" {unit}",
-                topic
-            )
+                        "[%s] model=%s question_var=%s key=%s pair=%s question=%s encoding=%s/%s bytes=%s raw=%s calc=%s -> value=%s%s topic=%s",
+                        device_name,
+                        device_type,
+                        device_type,
+                        key,
+                        pair,
+                        qstr,
+                        meta["part"],
+                        meta["decode"],
+                        None if b is None else b.hex(),
+                        raw_int,
+                        _calc_desc(meta["decode"], raw_int),
+                        payload if payload != "null" else "null",
+                        "" if not unit else f" {unit}",
+                        topic
+                    )
