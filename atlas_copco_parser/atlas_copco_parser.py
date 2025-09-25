@@ -27,6 +27,36 @@ def normalize_vsd_buckets(values: dict, keys: list[str], total_seconds: float | 
         if len(perc) >= 2:
             perc[-1] = round(100.0 - sum(perc[:-1]), 2)
         return {k: perc[i] for i, k in enumerate(keys)}
+
+def postprocess_scaling(values: dict) -> dict:
+    out = dict(values)
+    # 1) Temperatures: /10
+    temp_keys = {'controller_temperature','ambient_air','aftercooler_pcb_temp','element_outlet'}
+    for k in temp_keys:
+        if k in out and out[k] is not None:
+            try:
+                out[k] = float(out[k]) / 10.0
+            except Exception:
+                pass
+    # 2) Pressure: compressor_outlet in bar = raw/1000
+    if 'compressor_outlet' in out and out['compressor_outlet'] is not None:
+        try:
+            out['compressor_outlet'] = float(out['compressor_outlet']) / 1000.0
+        except Exception:
+            pass
+    # 3) Hours counters: always /3600, regardless of magnitude
+    hourish = [
+        'running_hours','module_hours','low_load_hours',
+        'available_hours','unavailable_hours','emergency_stop_hours','display_hours'
+    ]
+    for k in list(out.keys()):
+        if k.endswith('_hours') or k in hourish:
+            if out.get(k) is not None:
+                try:
+                    out[k] = float(out[k]) / 3600.0
+                except Exception:
+                    pass
+    return out
     total = sum(nums)
     if not total or total <= 0:
         return {k: 0.0 for k in keys}
@@ -35,6 +65,36 @@ def normalize_vsd_buckets(values: dict, keys: list[str], total_seconds: float | 
     if len(perc) >= 2:
         perc[-1] = round(100.0 - sum(perc[:-1]), 2)
     return {k: perc[i] for i, k in enumerate(keys)}
+
+def postprocess_scaling(values: dict) -> dict:
+    out = dict(values)
+    # 1) Temperatures: /10
+    temp_keys = {'controller_temperature','ambient_air','aftercooler_pcb_temp','element_outlet'}
+    for k in temp_keys:
+        if k in out and out[k] is not None:
+            try:
+                out[k] = float(out[k]) / 10.0
+            except Exception:
+                pass
+    # 2) Pressure: compressor_outlet in bar = raw/1000
+    if 'compressor_outlet' in out and out['compressor_outlet'] is not None:
+        try:
+            out['compressor_outlet'] = float(out['compressor_outlet']) / 1000.0
+        except Exception:
+            pass
+    # 3) Hours counters: always /3600, regardless of magnitude
+    hourish = [
+        'running_hours','module_hours','low_load_hours',
+        'available_hours','unavailable_hours','emergency_stop_hours','display_hours'
+    ]
+    for k in list(out.keys()):
+        if k.endswith('_hours') or k in hourish:
+            if out.get(k) is not None:
+                try:
+                    out[k] = float(out[k]) / 3600.0
+                except Exception:
+                    pass
+    return out
 
 def normalize_model(s: str) -> str:
     s = (s or "").strip().upper()
@@ -372,6 +432,8 @@ def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, inter
                     total_seconds = sum(buckets)
             normed = normalize_vsd_buckets(values, vsd_keys, total_seconds=total_seconds)
             values.update(normed)
+        # heuristic scaling fixes
+        values = postprocess_scaling(values)
         # second pass: publish
         for key, meta in sensors.items():
             val = values.get(key)
