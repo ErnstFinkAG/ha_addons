@@ -5,7 +5,7 @@ import requests
 import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
-VERSION = "0.0.4"
+VERSION = "0.1.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("atlas_copco")
