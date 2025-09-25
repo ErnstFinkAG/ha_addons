@@ -47,32 +47,19 @@ Legend:
 
 ---
 
+
 ## Configuration (`/data/options.json`)
 
-| Key | Type | Example | Notes |
-|---|---|---|---|
-| `ip_list` | string (CSV) | `"10.60.23.11"` | One or more controllers |
-| `name_list` | string (CSV) | `"eftool-bw-b2-air1"` | Friendly device names |
-| `interval_list` | string (CSV) | `"10"` | Poll interval (s) |
-| `timeout_list` | string (CSV) | `"5"` | HTTP timeout (s) |
-| `verbose_list` | string (CSV) | `"true"` | Verbose logging per host |
-| `mqtt_host` | string | `"core-mosquitto"` | MQTT broker |
-| `mqtt_port` | number | `1883` |  |
-| `mqtt_user` | string | `""` | Optional |
-| `mqtt_password` | string | `""` | Optional |
-| `discovery_prefix` | string | `"homeassistant"` | HA MQTT discovery prefix |
-| `scaling_overrides` | JSON string | `"{}"` | Optional per‑sensor multiplier (applied after decode) |
+Minimal options (single controller):
 
-> CSV values are matched **by position** per host (last value repeats).
-
-Example:
 ```json
 {
-  "ip_list": "10.60.23.11",
-  "name_list": "eftool-bw-b2-air1",
-  "interval_list": "10",
-  "timeout_list": "5",
-  "verbose_list": "true",
+  "ip": "10.60.23.11",
+  "name": "compressor_a",
+  "type": "gs15vp13",
+  "interval": 10,
+  "timeout": 5,
+  "verbose": false,
   "mqtt_host": "core-mosquitto",
   "mqtt_port": 1883,
   "mqtt_user": "",
@@ -82,13 +69,15 @@ Example:
 }
 ```
 
----
+- `type`: choose **gs15vp13** or **gs15vs23a** (mirrors PowerShell question sets).
+- MQTT discovery uses `homeassistant/<platform>/<device_slug>/<key>/config` with clean entity ids.
+
 
 ## MQTT Discovery (entity_id fix)
 
 - **Node ID (topic):** device slug, e.g. `eftool_bw_b2_air1`  
 - **Object ID:** just the sensor key, e.g. `vsd_80_100`  
-- **Unique ID:** `atlas:<device_slug>:<key>`  
+- **Unique ID:** `mk5s:<device_slug>:<key>`  
 - **State topic:** `<device_slug>/<key>`
 
 `homeassistant/<platform>/<device_slug>/<device_slug>_<key>/config` (emptied, retained),
@@ -96,3 +85,20 @@ then publishes the correct one:
 `homeassistant/<platform>/<device_slug>/<key>/config`.
 
 ---
+
+
+### Multiple controllers
+
+Provide comma‑separated values for `ip`, `name`, and `type` (aligned by index):
+
+```json
+{
+  "ip": "10.60.23.11,10.60.23.12",
+  "name": "compressor1,compressor2",
+  "type": "gs15vp13,gs15vs23a",
+  "interval": 10,
+  "timeout": 5,
+  "mqtt_host": "core-mosquitto",
+  "mqtt_port": 1883
+}
+```

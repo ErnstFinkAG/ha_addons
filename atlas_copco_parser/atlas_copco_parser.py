@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Atlas Copco Parser — Home Assistant add-on
+# MK5s Client — Home Assistant add-on
 # VERSION: 0.8.1-entityid-fix-2025-09-04
 #
 # This version mirrors the PowerShell script:
@@ -16,43 +16,21 @@ import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
 SELF_PATH = __file__
-VERSION = "0.9.8.1"
+VERSION = "0.8.1-entityid-fix-2025-09-04"
 
 # ------------------------- PowerShell QUESTION (exact) ------------------------
-QUESTION_HEX = (
-    "300201300203300205300208"
-    "30030130030230030a"
-    "30070130070330070430070530070630070730070830070930070b30070c30070d30070e30070f300714300715300718300722300723300724"
-    "30210130210530210a"
-    "300501300502300504300505300507300508300509"
-    "300e03300e04300e2a300e88"
-    "31130131130331130431130531130731130831130931130a31130b31130c31130d31130e31130f31131031131131131231131331131431131531131631131731131831131931131a31131b31131c31131d31131e31131f31132031132131132231132331132431132531132631132731132831132931132a31132b31132c31132d31132e31132f31133031133131133231133331133431133531133631133731133831133931133a31133b31133c31133d31133e31133f31134031134131134231134331134431134531134631134731134831134931134a31134b31134c31134d31134e31134f31135031135131135231135331135431135531135631135731135831135931135a31135b31135c31135d31135e31135f311360311361311362311363311364311365311366311367"
-    "31140131140231140331140431140531140631140731140831140931140a31140b31140c31140d31140e31140f311410311411311412"
-    "300901300906300907"
-    "300108"
+QUESTION_HEX_GS15VP13 = (
+    "30020130020330020530020830030130030230030a30070130070330070430070530070630070730070830070930070b30070c30070d30070e30070f30071430071530071830072230072330072430210130210530210a300501300502300504300505300507300508300509300e03300e04300e2a300e8831130131130331130431130531130731130831130931130a31130b31130c31130d31130e31130f31131031131131131231131331131431131531131631131731131831131931131a31131b31131c31131d31131e31131f31132031132131132231132331132431132531132631132731132831132931132a31132b31132c31132d31132e31132f31133031133131133231133331133431133531133631133731133831133931133a31133b31133c31133d31133e31133f31134031134131134231134331134431134531134631134731134831134931134a31134b31134c31134d31134e31134f31135031135131135231135331135431135531135631135731135831135931135a31135b31135c31135d31135e31135f31136031136131136231136331136431136531136631136731140131140231140331140431140531140631140731140831140931140a31140b31140c31140d31140e31140f311410311411311412300901300906300911300907300912300108"
 )
 
-# ------------------------------ Presets --------------------------------------
-# Map compressor "type" to a preset QUESTION and (optionally) a sensor map.
-# If "sensors" is omitted or None, the default SENSORS is used.
-PRESETS: Dict[str, Dict[str, Any]] = {
-    "GA15VS23A": {"question_hex": "", "sensors": {}},
-    "GA15VP_13": {"question_hex": "", "sensors": {}},
-}
+QUESTION_HEX_GS15VS23A = (
+    "30020130022430022630022730022a30026630032130032230032e30032f30033030070130070330070430070530070630070730070830070930070b30070c30070d30070e30070f30071730071830071b30072530072630072730074330074c30074d30075430075530075630075730210130210530210a30220130220a30051f30052030052130052730052830052930052a300e03300e04300e05300e2a300ef3310e23310e27310e2b310e3b31130131130331130431130531130731130831130931130a31130b31130c31130d31130e31130f31131031131131131231131331131431131531131631131731131831131931131a31131b31131c31131d31131e31131f31132031132131132231132331132431132531132631132731132831132931132a31132b31132c31132d31132e31132f31133031133131133231133331133431133531133631133731133831133931133a31133b31133c31133d31133e31133f31134031134131134231134331134431134531134631134731134831134931134a31134b31134c31134d31134e31134f31135031135131135231135331135431135531135631135731135831135931135a31135b31135c31135d31135e31135f31136031136131136231136331136431136531136631136731140131140231140331140431140531140631140731140831140931140a31140b31140c31140d31140e31140f311410311411311412300901300906300911300907300912300909300914300108"
+)
 
-def resolve_preset(type_name: str) -> Tuple[str, Dict[str, Dict[str, Any]]]:
-    key = (type_name or "").strip().upper().replace("-", "_")
-    if key not in PRESETS:
-        raise ValueError(f"Unknown compressor type: {type_name}")
-    qhex = PRESETS[key].get("question_hex", "")
-    if not isinstance(qhex, str) or not qhex.strip():
-        raise ValueError(f"No question configured for type {type_name}")
-    sens_over = PRESETS[key].get("sensors") or {}
-    merged = dict(SENSORS)
-    for k, o in sens_over.items():
-        mm = dict(merged.get(k, {})); mm.update({kk: vv for kk, vv in o.items() if vv is not None}); merged[k] = mm
-    return re.sub(r"\\s+", "", qhex), merged
+# Selected per add-on option 'type': 'gs15vp13' or 'gs15vs23a'
+QUESTION_HEX = QUESTION_HEX_GS15VP13  # default; overridden at runtime
 
+# ------------------------- Helpers ------------------------
 def file_sha256(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -136,67 +114,6 @@ DECODERS = {
     "_times1000": _times1000,
 }
 
-
-
-# -------------------- Translation overrides (per-item) --------------------
-def merge_sensors(base: dict, overrides: dict) -> dict:
-    out = dict(base)
-    for k, om in (overrides or {}).items():
-        nm = dict(out.get(k, {}))
-        nm.update({kk: vv for kk, vv in om.items() if vv is not None})
-        out[k] = nm
-    return out
-
-def load_per_item_translation_from_opts(opts: dict) -> None:
-    """
-    Read per-sensor entries from options:
-      <key>_name => name
-      <key>_key => pair
-      <key>_encoding => part  (hi/lo/u32 or HiU16/LoU16/UInt32)
-      <key>_calc => decode    (accepts hints like /1000, /10, /3600, *1000, bucket, 3000-, 6000-, or decoder id like _div1000)
-    """
-    global SENSORS
-    enc_map = {"hi":"hi","hiu16":"hi","high":"hi","lo":"lo","lou16":"lo","low":"lo","u32":"u32","uint32":"u32"}
-    hint_map = {
-        "_div1000": ["div1000","/1000"],
-        "_div10": ["div10","/10"],
-        "_hours_from_seconds_u32": ["sec2h","/3600","seconds/3600"],
-        "_times1000": ["*1000","x1000","mul1000"],
-        "_percent_from_bucket": ["bucket","65831881","percent"],
-        "_service_remaining_3000": ["3000-","servicea","a-"],
-        "_service_remaining_6000": ["6000-","serviceb","b-"],
-    }
-    overrides = {}
-    for key, meta in sensors_def.items():
-        o = {}
-        v = opts.get(f"{key}_name")
-        if isinstance(v, str) and v.strip():
-            o["name"] = v.strip()
-        v = opts.get(f"{key}_key")
-        if isinstance(v, str) and v.strip():
-            o["pair"] = v.strip()
-        v = opts.get(f"{key}_encoding")
-        if isinstance(v, str) and v.strip():
-            o["part"] = enc_map.get(v.strip().lower(), meta.get("part"))
-        v = opts.get(f"{key}_calc")
-        if isinstance(v, str) and v.strip():
-            calc = v.strip()
-            if calc.startswith("_"):
-                # accept direct decoder id if known
-                o["decode"] = calc if calc in DECODERS else meta.get("decode")
-            else:
-                c = calc.lower().replace(" ", "")
-                chosen = None
-                for fn, hints in hint_map.items():
-                    if any(h in c for h in hints):
-                        chosen = fn
-                        break
-                if chosen:
-                    o["decode"] = chosen
-        if o:
-            overrides[key] = o
-    if overrides:
-        SENSORS = merge_sensors(SENSORS, overrides)
 # ------------------------------ Sensors --------------------------------------
 SENSORS: Dict[str, Dict[str, Any]] = {
     "pressure_bar":           {"pair":"3002.01","part":"hi", "decode":"_div1000","unit":"bar","device_class":"pressure","state_class":"measurement","name":"Pressure"},
@@ -231,8 +148,8 @@ SENSORS: Dict[str, Dict[str, Any]] = {
 
     "fan_motor":              {"pair":"3005.01","part":"hi", "decode":"_id","unit":None,"device_class":"running","state_class":None,"kind":"binary_sensor","name":"Fan Motor"},
 
-    "service_a":     {"pair":"3009.06","part":"u32","decode":"_service_remaining_3000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service A Remaining"},
-    "service_b":     {"pair":"3009.07","part":"u32","decode":"_service_remaining_6000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service B Remaining"},
+    "service_3000_hours":     {"pair":"3009.06","part":"u32","decode":"_service_remaining_3000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service 3000h Remaining"},
+    "service_6000_hours":     {"pair":"3009.07","part":"u32","decode":"_service_remaining_6000","unit":"h","device_class":"duration","state_class":"measurement","name":"Service 6000h Remaining"},
 
     "machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"}
 }
@@ -246,7 +163,7 @@ def csv_list(s: str) -> List[str]:
     return [x.strip() for x in s.split(",")] if s and s.strip() else []
 
 
-def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix: str, sensors_def: Dict[str, Dict[str, Any]]):
+def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix: str):
     """
     Publish MQTT Discovery with clean entity ids:
     - node_id (topic segment) = base_slug
@@ -255,13 +172,13 @@ def mqtt_discovery(cli: mqtt.Client, base_slug: str, name: str, discovery_prefix
     Also: publish empty retained configs to potential legacy topics that used base_slug twice.
     """
     device = {
-        "ids": [f"atlas_{base_slug}"],
+        "ids": [f"mk5s_{base_slug}"],
         "mf": "Atlas Copco",
         "mdl": "MK5s Touch",
         "name": name,
     }
     avail_topic = f"{base_slug}/availability"
-    for key, meta in sensors_def.items():
+    for key, meta in SENSORS.items():
         is_binary = (meta.get("kind", "sensor") == "binary_sensor")
         platform = "binary_sensor" if is_binary else "sensor"
         # New, clean topic: .../<platform>/<node_id>/<object_id>/config  with object_id = key only
@@ -313,49 +230,48 @@ def single_pair_read(session: requests.Session, ip: str, pair: str, timeout: int
     toks = tokenize_answer(clean, 1)
     tok = toks[0] if toks else None
     if verbose:
-        print(f"[atlas:{ip}] FALLBACK_Q={q}", flush=True)
-        print(f"[atlas:{ip}] FALLBACK_A_RAW={repr(raw)}", flush=True)
-        print(f"[atlas:{ip}] FALLBACK_A_CLEAN={repr(clean)} TOKENS={len(toks)}", flush=True)
-        print(f"[atlas:{ip}]   token[fallback] {pair} = {tok if tok else 'None'}", flush=True)
+        print(f"[mk5s:{ip}] FALLBACK_Q={q}", flush=True)
+        print(f"[mk5s:{ip}] FALLBACK_A_RAW={repr(raw)}", flush=True)
+        print(f"[mk5s:{ip}] FALLBACK_A_CLEAN={repr(clean)} TOKENS={len(toks)}", flush=True)
+        print(f"[mk5s:{ip}]   token[fallback] {pair} = {tok if tok else 'None'}", flush=True)
     return tok
 
 def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: bool,
-           mqtt_settings: dict, scaling_overrides: Dict[str, float], question_hex: str, sensors_def: Dict[str, Dict[str, Any]]):
+           mqtt_settings: dict, scaling_overrides: Dict[str, float], qhex):
     base_slug = slugify(name or ip)
-    cli = mqtt.Client(client_id=f"atlas_{base_slug}", clean_session=True)
+    cli = mqtt.Client(client_id=f"mk5s_{base_slug}", clean_session=True)
     if mqtt_settings.get("user") or mqtt_settings.get("password"):
         cli.username_pw_set(mqtt_settings.get("user",""), mqtt_settings.get("password",""))
     avail_topic = f"{base_slug}/availability"
     cli.will_set(avail_topic, payload="offline", retain=True)
     cli.connect(mqtt_settings["host"], int(mqtt_settings["port"]), keepalive=60)
 
-    mqtt_discovery(cli, base_slug, name, mqtt_settings["discovery_prefix"], sensors_def)
+    mqtt_discovery(cli, base_slug, name, mqtt_settings["discovery_prefix"])
     cli.publish(avail_topic, "online", retain=True)
 
     session = requests.Session()
 
-    qhex = re.sub(r"\s+", "", question_hex)
     keys = build_keys_from_question(qhex)
 
     while not stop_event.is_set():
-        print(f"[atlas:{ip}] ==== decode cycle @ {time.strftime('%Y-%m-%d %H:%M:%S')} ====", flush=True)
+        print(f"[mk5s:{ip}] ==== decode cycle @ {time.strftime('%Y-%m-%d %H:%M:%S')} ====", flush=True)
         # Single-shot request
         try:
-            resp = session.post(f"http://{ip}/cgi-bin/mkv.cgi", data={"QUESTION": qhex}, timeout=timeout)
+            resp = session.post(f"http://{ip}/cgi-bin/mkv.cgi", data={"QUESTION": QUESTION_HEX}, timeout=timeout)
             raw = resp.text if resp.status_code == 200 else ""
         except Exception as e:
             raw = f"EXC:{e}"
         clean = clean_answer(raw)
         tokens = tokenize_answer(clean, len(keys))
         if verbose:
-            print(f"[atlas:{ip}] Q_SINGLE(len={len(qhex)})={qhex}", flush=True)
-            print(f"[atlas:{ip}] A_SINGLE_RAW={repr(raw)}", flush=True)
-            print(f"[atlas:{ip}] A_SINGLE_CLEAN(len={len(clean)}) TOKENS={len(tokens)}", flush=True)
+            print(f"[mk5s:{ip}] Q_SINGLE(len={len(qhex)})={QUESTION_HEX}", flush=True)
+            print(f"[mk5s:{ip}] A_SINGLE_RAW={repr(raw)}", flush=True)
+            print(f"[mk5s:{ip}] A_SINGLE_CLEAN(len={len(clean)}) TOKENS={len(tokens)}", flush=True)
 
         pair_raw: Dict[str, Optional[str]] = {}
         for k, tok in zip(keys, tokens):
             if verbose:
-                print(f"[atlas:{ip}]   token[single] {k} = {tok if tok else 'None'}", flush=True)
+                print(f"[mk5s:{ip}]   token[single] {k} = {tok if tok else 'None'}", flush=True)
             pair_raw[k] = tok
 
         # Targeted fallbacks for fields that matter to HA
@@ -366,7 +282,7 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
                     pair_raw[pair] = tok
 
         # Decode & publish
-        for key, meta in sensors_def.items():
+        for key, meta in SENSORS.items():
             pair = meta["pair"].upper()
             raw8 = pair_raw.get(pair)
             if raw8 is None:
@@ -393,7 +309,7 @@ def worker(idx: int, ip: str, name: str, interval: int, timeout: int, verbose: b
             raw_disp = raw8 if raw8 is not None else "X/None"
             int_disp = "—" if partv is None else str(partv)
             calc_disp = "unknown" if calc is None else f"{calc}{meta.get('unit') or ''}"
-            print(f"[atlas:{ip}] {key:<24} pair={pair:<7} part={meta['part']:<3} raw={raw_disp:<10} int={int_disp:<12} calc={calc_disp}", flush=True)
+            print(f"[mk5s:{ip}] {key:<24} pair={pair:<7} part={meta['part']:<3} raw={raw_disp:<10} int={int_disp:<12} calc={calc_disp}", flush=True)
 
         # Sleep
         for _ in range(int(interval * 10)):
@@ -407,7 +323,9 @@ def log_banner():
         sha = file_sha256(SELF_PATH)[:16]
     except Exception:
         pass
-    print(f"[atlas] mk5s_client.py VERSION={VERSION} SHA256[:16]={sha}", flush=True)
+    print(f"[mk5s] mk5s_client.py VERSION={VERSION} SHA256[:16]={sha}", flush=True)
+
+
 
 def main():
     try:
@@ -416,61 +334,63 @@ def main():
     except Exception:
         opts = {}
 
-    # Apply per-item translation overrides
-    load_per_item_translation_from_opts(opts)
+    # Accept scalar or CSV for these three keys (aligned by index)
+    ips = csv_list(opts.get("ip", ""))
+    names = csv_list(opts.get("name", ""))
+    types = [t.lower() for t in csv_list(opts.get("type", ""))]
 
-    ip_list = csv_list(opts.get("ip_list", ""))
-    name_list = csv_list(opts.get("name_list", ""))
-    interval_list = csv_list(opts.get("interval_list", ""))
-    type_list = csv_list(opts.get("type_list", ""))
-    timeout_list = csv_list(opts.get("timeout_list", ""))
-    verbose_list = csv_list(opts.get("verbose_list", ""))
+    # Backward-compat: also look at legacy *_list keys if scalar keys empty
+    if not ips:
+        ips = csv_list(opts.get("ip_list", ""))
+    if not names:
+        names = csv_list(opts.get("name_list", ""))
+    # Legacy didn't have types; default to gs15vp13 when missing
+    if not types and opts.get("type"):
+        types = [str(opts.get("type","gs15vp13")).lower()]
+    if not types:
+        # If not provided at all, assume all are gs15vp13
+        types = ["gs15vp13"] * max(1, len(ips))
+
+    # Expand lengths to the longest provided, filling sensible defaults
+    n = max(len(ips), len(names), len(types), 1)
+    if len(ips) < n:
+        ips += [ips[-1] if ips else "10.60.23.11"] * (n - len(ips))
+    if len(names) < n:
+        names += [f"compressor_{i+1}" for i in range(len(names), n)]
+    if len(types) < n:
+        types += [types[-1] if types else "gs15vp13"] * (n - len(types))
+
+    interval = int(opts.get("interval", 10))
+    timeout = int(opts.get("timeout", 5))
+    verbose = str(opts.get("verbose", "false")).lower() in ("1","true","yes","on")
 
     try:
         scaling_overrides = json.loads(opts.get("scaling_overrides", "{}"))
     except Exception:
         scaling_overrides = {}
 
-    if not ip_list:
-        ip_list = ["10.60.23.11"]
-
-    def pick(lst: List[str], i: int, default: str) -> str:
-        if not lst:
-            return default
-        return lst[i] if i < len(lst) and lst[i] != "" else (lst[-1] if lst[-1] != "" else default)
-
     mqtt_settings = {
-        "host": opts.get("mqtt_host", "localhost"),
-        "port": opts.get("mqtt_port", 1883),
+        "host": opts.get("mqtt_host", "core-mosquitto"),
+        "port": int(opts.get("mqtt_port", 1883)),
         "user": opts.get("mqtt_user", ""),
         "password": opts.get("mqtt_password", ""),
         "discovery_prefix": opts.get("discovery_prefix", "homeassistant"),
     }
 
     log_banner()
+    print(f"[mk5s] controllers={n} interval={interval}s timeout={timeout} verbose={verbose}", flush=True)
 
-    threads: List[threading.Thread] = []
-    for i, ip in enumerate(ip_list):
-        name = pick(name_list, i, ip)
-        ctype = (type_list[i] if i < len(type_list) else "DEFAULT")
-        qhex, sensors_def = resolve_preset(ctype)
-        qhex = question_list[i]
-        try:
-            interval = int(pick(interval_list, i, "10"))
-        except Exception:
-            interval = 10
-        try:
-            timeout = int(pick(timeout_list, i, "5"))
-        except Exception:
-            timeout = 5
-        verbose = pick(verbose_list, i, "false").lower() in ("1","true","yes","on")
-
-        print(f"[atlas] starting: host={ip} name={name} interval={interval}s timeout={timeout} verbose={verbose}", flush=True)
+    threads = []
+    for idx in range(n):
+        type_str = types[idx]
+        # Pick QUESTION_HEX for each worker without touching global used by others
+        qhex = QUESTION_HEX_GS15VS23A if type_str in ("gs15vs23a","ga15vs23a") else QUESTION_HEX_GS15VP13
         t = threading.Thread(target=worker,
-                             args=(i, ip, name, interval, timeout, verbose, mqtt_settings, scaling_overrides),
+                             args=(idx, ips[idx], names[idx], interval, timeout, verbose, mqtt_settings, scaling_overrides, qhex),
                              daemon=True)
-        threads.append(t)
         t.start()
+        threads.append(t)
+        print(f"[mk5s] #{idx+1}: ip={ips[idx]} name={names[idx]} type={type_str}", flush=True)
 
     def handle_sigterm(signum, frame):
         stop_event.set()
@@ -486,4 +406,8 @@ def main():
             t.join(timeout=5.0)
 
 if __name__ == "__main__":
+    main()
+
+    main()
+
     main()
