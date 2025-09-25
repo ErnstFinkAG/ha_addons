@@ -5,10 +5,35 @@ import requests
 import paho.mqtt.client as mqtt
 
 OPTIONS_PATH = "/data/options.json"
-VERSION = "0.1.0"
+VERSION = "0.0.5"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("atlas_copco")
+
+def normalize_model(s: str) -> str:
+    s = (s or "").strip().upper()
+    aliases = {
+        "GA15VS23A": "GA15VS23A",
+        "GA15-VS23A": "GA15VS23A",
+        "VS23A": "GA15VS23A",
+        "GA15VP13": "GA15VP13",
+        "GA15-VP13": "GA15VP13",
+        "VP13": "GA15VP13",
+    }
+    return aliases.get(s, s)
+
+def try_probe_model(sess: requests.Session, ip: str, timeout: int, verbose: bool=False) -> str:
+    b_vs = get_pair_bytes(sess, ip, "3002.01", timeout=timeout, verbose=verbose) or b""
+    b_vp = get_pair_bytes(sess, ip, "3002.08", timeout=timeout, verbose=verbose) or b""
+    if b_vs and not b_vp:
+        return "GA15VS23A"
+    if b_vp and not b_vs:
+        return "GA15VP13"
+    if len(b_vs) >= len(b_vp) and b_vs:
+        return "GA15VS23A"
+    if b_vp:
+        return "GA15VP13"
+    return "GA15VS23A"
 
 # ---------------- Controller Question strings (when bulk reads are supported) ----------------
 QUESTION_GA15VS23A = (
@@ -321,7 +346,8 @@ def main():
     mqtt_password = opts.get("mqtt_password", "")
     discovery_prefix = opts.get("discovery_prefix", "homeassistant")
 
-    bus = MqttBus(mqtt_host, mqtt_port, mqtt_user, mqtt_password, client_id=f"atlas_copco_{int(time.time())}")
+    auto = bool(str(opts.get("autodetect", "true")).lower() in ("1","true","yes","on"))
+        bus = MqttBus(mqtt_host, mqtt_port, mqtt_user, mqtt_password, client_id=f"atlas_copco_{int(time.time())}")
 
     threads = []
     stop = threading.Event()
@@ -355,3 +381,28 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def poll_once(bus: MqttBus, sess: requests.Session, ip: str, device_name: str, device_type: str, timeout: int, verbose: bool, discovery_prefix: str):
+    sensors = SENSORS_GA15VS23A if device_type == "GA15VS23A" else SENSORS_GA15VP13
+    device_slug = slugify(device_name)
+    base = f"atlas_copco/{device_slug}/sensor"
+    avail = f"atlas_copco/{device_slug}/availability"
+
+    for key, meta in sensors.items():
+        val = None
+        b = get_pair_bytes(sess, ip, meta["pair"], timeout=timeout, verbose=verbose)
+        if b is not None:
+            raw = parse_value(meta["part"], b)
+            if raw is not None:
+                dec = DECODERS[meta["decode"]]
+                try:
+                    val = dec(raw)
+                except Exception as e:
+                    if verbose:
+                        log.warning("[%s] decode %s failed: %s", device_name, key, e)
+        topic = f"{base}/{slugify(key)}"
+        payload = "null" if val is None else json.dumps(val)
+        bus.pub(topic, payload, retain=True)
+        if verbose:
+            log.info("[%s] %s = %s", device_name, key, payload)
