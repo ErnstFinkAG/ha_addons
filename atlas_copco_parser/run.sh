@@ -1,4 +1,3 @@
-#!/usr/bin/with-contenv sh
-set -e
-echo "[mk5s] starting container"
-exec python3 /app/atlas_copco_parser.py
+#!/bin/bash
+echo "[INFO] Starting Atlas Copco Parser..."
+exec python /app/main.py
