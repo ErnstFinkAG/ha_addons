@@ -1,55 +1,62 @@
-# Atlas Copco Parser (updated)
 
-Version: 0.0.7
+# Atlas Copco Parser (0.0.9)
 
-- Sequential polling only (no parallel).
-- Extremely verbose per-signal log line includes:
-  `model, question_var, key, pair, question, encoding, bytes, raw, calc, unit, topic`
-- Fixed/configurable MQTT client_id to avoid rc=5 when broker ACLs expect a stable identifier.
-- Sensor maps for `GA15VS23A` and `GA15VP13` (as provided).
-- HTTP question URL is **configurable** via `question_templates` so you can match your device API without code changes.
+Single-file parser with detailed logging and MQTT publishing.
 
-## Config
+## Features
+- Sequential polling only (prevents value/key mixups).
+- Very verbose per-metric logs: model, key, pair, question, part/decoder, bytes, raw, calc, value, unit, topic.
+- Correct maps for **GA15VS23A** and **GA15VP13**.
+- Legacy env fallback (works without YAML):
+  - `AC_HOSTS`, `AC_MODELS`, optional `AC_NAMES`
+  - `TIMEOUT`, `VERBOSE`
+- MQTT envs: `MQTT_HOST`/`MQTT_PORT`/`MQTT_USER`/`MQTT_PASSWORD`.
+- Bump: version 0.0.9.
 
-Create `/config/config.yml` (or set `ACPARSER_CONFIG` env) like:
+## Quick Start (Legacy Env Mode)
+```
+AC_HOSTS=10.60.23.11,10.60.23.12
+AC_MODELS=GA15VP13,GA15VS23A
+AC_NAMES=eftool-bw-b2-f3-air11,eftool-bw-b2-f3-air12
+MQTT_HOST=broker
+MQTT_PORT=1883
+VERBOSE=true
+TIMEOUT=2.5
+python3 atlas_copco_parser.py
+```
+
+## Config File (optional)
+Place `/config/config.yml` or set `AC_CONFIG=/path/to/config.yml`:
 
 ```yaml
 mqtt:
-  host: 127.0.0.1
+  host: broker
   port: 1883
-  user: myuser
-  password: mypass
-  client_id: atlas_copco_parser
-  tls: false
+  user: ""
+  password: ""
 
+base_prefix: atlas_copco
 discovery_prefix: homeassistant
-
-# List of templates tried in order. Must contain {ip} and {question}
-question_templates:
-  - "http://{ip}/q?m={question}"
-  - "http://{ip}/mem/{question}"
-  - "http://{ip}/api/mb?m={question}"
 
 devices:
   - name: eftool-bw-b2-f3-air11
     ip: 10.60.23.11
-    device_type: GA15VP13
+    model: GA15VP13
+    timeout: 2.5
+    verbose: true
+
   - name: eftool-bw-b2-f3-air12
     ip: 10.60.23.12
-    device_type: GA15VS23A
+    model: GA15VS23A
+    timeout: 2.5
+    verbose: true
 ```
-
-Or provide environment variable for devices:
-```
-ACPARSER_DEVICES="eftool-bw-b2-f3-air11,10.60.23.11,GA15VP13;eftool-bw-b2-f3-air12,10.60.23.12,GA15VS23A"
-```
-
-## MQTT
-
-- Topics: `atlas_copco/<slug(name)>/sensor/<key>`
-- Payload: JSON number or `null`
 
 ## Notes
+- The HTTP endpoints differ across controllers. This script tries a few common paths:
+  `/{question}`, `/q?code={question}`, `/values?obj={question}`.
+- If your controller requires a different path or authentication, adapt `DeviceSession.ask_question` accordingly.
+- Set `ONE_SHOT=true` to run a single poll cycle, else it loops with `POLL_INTERVAL` (seconds).
 
-- If you see `MQTT connected rc=5 (Not authorized)`, either credentials/ACLs are wrong **or** your broker rejects changing client IDs. Set a fixed `mqtt.client_id` or `MQTT_CLIENT_ID` env.
-- If fetch fails, adjust `question_templates` to the correct device endpoint that returns 4 bytes per question.
+## License
+MIT
