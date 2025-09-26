@@ -9,6 +9,7 @@ VERSION = "0.1.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("atlas_copco")
+THREAD_CTX = threading.local()
 
 def normalize_model(s: str) -> str:
     s = (s or "").strip().upper()
@@ -134,19 +135,15 @@ def _id(v: int) -> int: return v
 def _div10(v: int) -> float: return round(v / 10.0, 1)
 def _div1000(v: int) -> float: return round(v / 1000.0, 3)
 def _hours_from_seconds_u32(v: int) -> float:
-    global CURRENT_RUNNING_SECONDS
     try:
-        CURRENT_RUNNING_SECONDS = float(v)
+        THREAD_CTX.running_seconds = float(v)
     except Exception:
-        CURRENT_RUNNING_SECONDS = None
+        THREAD_CTX.running_seconds = None
     return round(v / 3600.0, 1)
 def _percent_from_bucket(v: int) -> float:
-    try:
-        denom = float(CURRENT_RUNNING_SECONDS) if CURRENT_RUNNING_SECONDS else 0.0
-    except Exception:
-        denom = 0.0
+    denom = getattr(THREAD_CTX, 'running_seconds', 0.0) or 0.0
     if denom > 0.0:
-        return round((float(v) / denom) * 100.0, 2)
+        return round((float(v) / float(denom)) * 100.0, 2)
     return 0.0
 def _times1000(v: int) -> int: return v * 1000
 
@@ -278,6 +275,8 @@ def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, inter
 
     while True:
         started = time.time()
+        # reset denominator each loop; will be set when running_hours is decoded
+        THREAD_CTX.running_seconds = None
         for key, meta in sensors.items():
             val = None
             b = get_pair_bytes(sess, ip, meta["pair"], timeout=timeout, verbose=verbose)
