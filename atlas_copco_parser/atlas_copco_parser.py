@@ -129,11 +129,25 @@ SENSORS_GA15VP13: Dict[str, Dict[str, Any]] = {
 }
 
 # ---------------- Decoders ----------------
+CURRENT_RUNNING_SECONDS = None
 def _id(v: int) -> int: return v
 def _div10(v: int) -> float: return round(v / 10.0, 1)
 def _div1000(v: int) -> float: return round(v / 1000.0, 3)
-def _hours_from_seconds_u32(v: int) -> float: return round(v / 3600.0, 1)
-def _percent_from_bucket(v: int) -> float: return round((v / 65831881.0) * 100.0, 2)
+def _hours_from_seconds_u32(v: int) -> float:
+    global CURRENT_RUNNING_SECONDS
+    try:
+        CURRENT_RUNNING_SECONDS = float(v)
+    except Exception:
+        CURRENT_RUNNING_SECONDS = None
+    return round(v / 3600.0, 1)
+def _percent_from_bucket(v: int) -> float:
+    try:
+        denom = float(CURRENT_RUNNING_SECONDS) if CURRENT_RUNNING_SECONDS else 0.0
+    except Exception:
+        denom = 0.0
+    if denom > 0.0:
+        return round((float(v) / denom) * 100.0, 2)
+    return 0.0
 def _times1000(v: int) -> int: return v * 1000
 
 DECODERS = {
