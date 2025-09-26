@@ -9,11 +9,6 @@ VERSION = "0.1.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("atlas_copco")
-# --- VSD context ---
-CURRENT_DEVICE_NAME = None
-RAW_RUNNING_SECONDS = {}
-# --------------------
-
 
 def normalize_model(s: str) -> str:
     s = (s or "").strip().upper()
@@ -138,17 +133,7 @@ def _id(v: int) -> int: return v
 def _div10(v: int) -> float: return round(v / 10.0, 1)
 def _div1000(v: int) -> float: return round(v / 1000.0, 3)
 def _hours_from_seconds_u32(v: int) -> float: return round(v / 3600.0, 1)
-def _percent_from_bucket(v: int) -> float:
-    # Compute percentage from bucket seconds using the *current device\'s* running seconds
-    if CURRENT_DEVICE_NAME is None:
-        return None
-    total = RAW_RUNNING_SECONDS.get(CURRENT_DEVICE_NAME)
-    if not total or total <= 0:
-        return None
-    try:
-        return round((float(v) / float(total)) * 100.0, 2)
-    except Exception:
-        return None
+def _percent_from_bucket(v: int) -> float: return round((v / 65831881.0) * 100.0, 2)
 def _times1000(v: int) -> int: return v * 1000
 
 DECODERS = {
