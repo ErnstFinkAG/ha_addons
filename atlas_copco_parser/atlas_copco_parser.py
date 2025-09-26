@@ -9,6 +9,7 @@ VERSION = "0.1.0"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("atlas_copco")
+VSD_LAST_LOG = {}  # device_name -> last log time
 THREAD_CTX = threading.local()
 
 def normalize_model(s: str) -> str:
@@ -299,8 +300,9 @@ def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, inter
 
     while True:
         started = time.time()
-        # reset denominator each loop; will be set when running_hours is decoded
+        # reset per-cycle context
         THREAD_CTX.running_seconds = None
+        THREAD_CTX.vsd_buf = {}
         for key, meta in sensors.items():
             val = None
             b = get_pair_bytes(sess, ip, meta["pair"], timeout=timeout, verbose=verbose)
@@ -317,7 +319,14 @@ def poll_device(bus: MqttBus, ip: str, device_name: str, device_type: str, inter
             payload = "null" if val is None else json.dumps(val)
             bus.pub(topic, payload, retain=True)
             if verbose:
-                log.info("[%s] %s = %s", device_name, key, payload)
+                if key.startswith("vsd_"):
+                    # buffer VSD values to log once per cycle
+                    try:
+                        THREAD_CTX.vsd_buf[key] = payload
+                    except Exception:
+                        pass
+                else:
+                    log.info("[%s] %s = %s", device_name, key, payload)
 
         # pacing
         delay = max(0.5, interval - (time.time() - started))
