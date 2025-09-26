@@ -44,6 +44,30 @@ QUESTION_GA15VP13 = (
     "30020130020330020530020830030130030230030a30070130070330070430070530070630070730070830070930070b30070c30070d30070e30070f30071430071530071830072230072330072430210130210530210a300501300502300504300505300507300508300509300e03300e04300e2a300e8831130131130331130431130531130731130831130931130a31130b31130c31130d31130e31130f31131031131131131231131331131431131531131631131731131831131931131a31131b31131c31131d31131e31131f31132031132131132231132331132431132531132631132731132831132931132a31132b31132c31132d31132e31132f31133031133131133231133331133431133531133631133731133831133931133a31133b31133c31133d31133e31133f31134031134131134231134331134431134531134631134731134831134931134a31134b31134c31134d31134e31134f31135031135131135231135331135431135531135631135731135831135931135a31135b31135c31135d31135e31135f31136031136131136231136331136431136531136631136731140131140231140331140431140531140631140731140831140931140a31140b31140c31140d31140e31140f311410311411311412300901300906300911300907300912300108"
 )
 
+
+# Deterministic publish order so running_hours is decoded before VSD buckets
+ORDER_GA15VS23A = [
+  'machine_status','controller_temperature','compressor_outlet','ambient_air','relative_humidity',
+  'element_outlet','aftercooler_pcb_temp','running_hours','motor_starts','load_relay',
+  'vsd_1_20','vsd_20_40','vsd_40_60','vsd_60_80','vsd_80_100',
+  'fan_starts','accumulated_volume','module_hours','emergency_stops','direct_stops',
+  'recirculation_starts','recirculation_failures','low_load_hours','available_hours','unavailable_hours',
+  'emergency_stop_hours','display_hours','boostflow_hours','boostflow_activations','emergency_stops_running',
+  'drain1_op_time','drain1_switching','drain1_manual','motor_rpm_requested','motor_rpm_actual',
+  'flow','motor_amperage','fan_rpm_requested','fan_rpm_actual','fan_motor_amperage',
+  'service_a_1','service_a_2','service_b_1','service_b_2','service_d_1','service_d_2'
+]
+ORDER_GA15VP13 = [
+  'machine_status','compressor_outlet','element_outlet','ambient_air','controller_temperature',
+  'running_hours','motor_starts','load_relay','load_cycles',
+  'vsd_1_20','vsd_20_40','vsd_40_60','vsd_60_80','vsd_80_100',
+  'fan_starts','accumulated_volume','module_hours','emergency_stops','direct_stops',
+  'recirculation_starts','recirculation_failures','low_load_hours','available_hours','unavailable_hours',
+  'emergency_stop_hours','display_hours','boostflow_hours','boostflow_activations','emergency_stops_running',
+  'drain1_op_time','drain1_switching','drain1_manual','motor_rpm_requested','motor_rpm_actual',
+  'flow','motor_amperage','fan_rpm_requested','fan_rpm_actual','fan_motor_amperage',
+  'service_a_1','service_a_2','service_b_1','service_b_2','service_d_1','service_d_2'
+]
 # ---------------- Sensor maps ----------------
 SENSORS_GA15VS23A: Dict[str, Dict[str, Any]] = {
     "machine_status":         {"pair":"3001.08","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"measurement","name":"Machine Status"},
@@ -107,7 +131,7 @@ SENSORS_GA15VP13: Dict[str, Dict[str, Any]] = {
     "vsd_20_40":              {"pair":"3007.06","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 20–40%"},
     "vsd_40_60":              {"pair":"3007.07","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 40–60%"},
     "vsd_60_80":              {"pair":"3007.08","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 60–80%"},
-    "vssd_80_100":            {"pair":"3007.09","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 80–100%"},
+    "vsd_80_100":            {"pair":"3007.09","part":"u32","decode":"_percent_from_bucket","unit":"%","device_class":None,"state_class":"measurement","name":"VSD 80–100%"},
     "fan_starts":             {"pair":"3007.0B","part":"u32","decode":"_id","unit":None,"device_class":None,"state_class":"total_increasing","name":"Fan Starts"},
     "accumulated_volume":     {"pair":"3007.0C","part":"u32","decode":"_times1000","unit":"m³","device_class":None,"state_class":"total_increasing","name":"Accumulated Volume"},
     "module_hours":           {"pair":"3007.0D","part":"u32","decode":"_hours_from_seconds_u32","unit":"h","device_class":"duration","state_class":"total_increasing","name":"Module Hours"},
