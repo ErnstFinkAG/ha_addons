@@ -1,7 +1,0 @@
-{
-  "addons": [
-    "./nec_tcp_remote",
-    "./test_addon"
-    "./mk5s"
-  ]
-}

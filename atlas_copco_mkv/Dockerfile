@@ -10,7 +10,9 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /usr/src/app
 
-RUN pip install pyyaml
+# Install Python deps into the venv
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip         && pip install --no-cache-dir -r /tmp/requirements.txt         && rm -f /tmp/requirements.txt
 
 # App files
 COPY atlas_copco_parser.py ./
