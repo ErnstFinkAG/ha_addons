@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[atlas_copco_parser] starting..."
+echo "[atlas_copco_mkv] starting..."
 
-python3 /usr/src/app/atlas_copco_parser.py
+python3 /usr/src/app/main.py
 status=$?
 
 if [ $status -eq 0 ]; then

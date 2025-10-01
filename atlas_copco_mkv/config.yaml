@@ -1,6 +1,6 @@
 name: Atlas Copco MKV
 version: 0.0.0.1
-slug: atlas_copco_parser
+slug: atlas_copco_mkv
 description: "Poll Atlas Copco MK5s Touch controllers and publish MQTT sensors. Supports multiple hosts via CSV config."
 arch:
   - amd64
