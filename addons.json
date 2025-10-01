@@ -1,7 +1,9 @@
 {
   "addons": [
-    "./nec_tcp_remote",
-    "./test_addon"
-    "./mk5s"
+    "./atlas_copco_mkv",
+    "./mk5s_client",
+    "./mqtt_tcp_bridge",
+    "./test_addon",
+    "./wh65lp_rs485_mqtt_bridge"
   ]
 }
